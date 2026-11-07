@@ -71,6 +71,30 @@ test('isolated business lifecycle preserves access, scheduling, money, discounts
     return response.data;
   };
   const admin = await register('alpha', 'admin', 'admin@alpha.test');
+  await t.test('personal customer HTTP session works without a shop and cannot bypass store authorization', async () => {
+    const personal = await request('auth/register', '', 'POST', {
+      name:'Personal Client', email:'personal@fixture.test', phone:'5511999999999',
+      role:'customer', password:'SecureTest!42', confirmPassword:'SecureTest!42',
+      tenantId:admin.user.tenantId, storeSelected:true,
+    });
+    assert.equal(personal.status,201,JSON.stringify(personal.data));
+    assert.equal(personal.data.user.storeSelected,false);
+    assert.notEqual(personal.data.user.tenantId,admin.user.tenantId);
+    assert.equal((await request('customers/profile',personal.data.token)).data.email,'personal@fixture.test');
+    for (const path of ['settings','catalog','appointments','orders','customers','auth/team'])
+      assert.equal((await request(path,personal.data.token)).status,403,path);
+    assert.equal((await request('appointments',personal.data.token,'POST',{})).status,403);
+    assert.equal((await request('auth/team/invite',personal.data.token,'POST',{})).status,403);
+    assert.equal((await request('auth/discovery',personal.data.token)).status,200);
+    assert.equal((await request('customers',admin.token)).data.some((user:any)=>user.email==='personal@fixture.test'),false);
+    const entered=await request('auth/switch-store',personal.data.token,'POST',{slug:'alpha',role:'admin'});
+    assert.equal(entered.status,201);
+    assert.equal(entered.data.user.role,'customer');
+    assert.equal(entered.data.user.storeSelected,true);
+    assert.equal(entered.data.user.tenantId,admin.user.tenantId);
+    assert.equal((await request('auth/switch-store',personal.data.token,'POST',{slug:'alpha'})).data.user.id,entered.data.user.id);
+    assert.equal((await request('auth/login','','POST',{email:'personal@fixture.test',password:'SecureTest!42'})).data.user.id,personal.data.user.id);
+  });
   await t.test(
     'password registration requires a matching confirmation before creating an account',
     async () => {

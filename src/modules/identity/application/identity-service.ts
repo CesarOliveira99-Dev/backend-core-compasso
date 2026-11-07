@@ -1,4 +1,5 @@
 import { AccountRecovery } from './account-recovery.js';
+import { CustomerAccounts } from './customer-accounts.js';
 import { Memberships, tokenHash } from './memberships.js';
 import {
   BadRequestException,
@@ -21,19 +22,45 @@ import { z } from 'zod';
 import { businessAddressSchema } from '../../settings/application/business-profile.schemas.js';
 @Injectable()
 export class IdentityService {
+  private readonly customerAccounts: CustomerAccounts;
   readonly recovery: AccountRecovery;
   readonly memberships: Memberships;
   private attempts = new Map<string, { count: number; since: number }>();
   constructor(
     private readonly context: Context,
     private readonly googleIdentity: GoogleIdentity,
-  ) { this.memberships = new Memberships(context); this.recovery=new AccountRecovery(context); }
-  member(actor:Actor) { return this.context.require<Customer>(actor, 'customers', actor.id); }
-  discovery(query:unknown) {
-    const input=parse(z.object({q:z.string().max(100).default(''),page:z.coerce.number().int().min(0).max(10000).default(0)}),query);
-    const normalize=(value:string)=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-    const items=this.stores().filter(store=>normalize(`${store.businessName} ${store.city} ${store.state}`).includes(normalize(input.q))).sort((a,b)=>a.businessName.localeCompare(b.businessName,'pt-BR'));
-    return {items:items.slice(input.page*8,input.page*8+8),hasMore:items.length>(input.page+1)*8};
+  ) {
+    this.customerAccounts = new CustomerAccounts(context);
+    this.memberships = new Memberships(context);
+    this.recovery = new AccountRecovery(context);
+  }
+  member(actor: Actor) {
+    return this.context.require<Customer>(actor, 'customers', actor.id);
+  }
+  discovery(query: unknown) {
+    const input = parse(
+      z.object({
+        q: z.string().max(100).default(''),
+        page: z.coerce.number().int().min(0).max(10000).default(0),
+      }),
+      query,
+    );
+    const normalize = (value: string) =>
+      value
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    const items = this.stores()
+      .filter((store) =>
+        normalize(`${store.businessName} ${store.city} ${store.state}`).includes(
+          normalize(input.q),
+        ),
+      )
+      .sort((a, b) => a.businessName.localeCompare(b.businessName, 'pt-BR'));
+    return {
+      items: items.slice(input.page * 8, input.page * 8 + 8),
+      hasMore: items.length > (input.page + 1) * 8,
+    };
   }
   stores() {
     return this.context.repository
@@ -96,17 +123,28 @@ export class IdentityService {
     if (input.inviteToken) {
       this.memberships.invitation(input.inviteToken);
       const enrollmentToken = randomBytes(32).toString('hex');
-      this.context.repository.put('system','google_enrollments',this.enrollmentKey(enrollmentToken),{...identity,inviteToken:input.inviteToken,expiresAt:Date.now()+600000});
-      return {status:'onboarding_required',enrollmentToken,profile:{name:identity.name,email:identity.email},stores:[],invitation:true};
+      this.context.repository.put(
+        'system',
+        'google_enrollments',
+        this.enrollmentKey(enrollmentToken),
+        { ...identity, inviteToken: input.inviteToken, expiresAt: Date.now() + 600000 },
+      );
+      return {
+        status: 'onboarding_required',
+        enrollmentToken,
+        profile: { name: identity.name, email: identity.email },
+        stores: [],
+        invitation: true,
+      };
     }
     const store = input.slug
       ? this.context.repository.get<{ tenantId: string }>('system', 'stores', input.slug)
       : undefined;
     const key = `${store?.tenantId}:${identity.sub}`;
     if (input.mode === 'link') {
+      const personal = actor!.storeSelected === false && !input.slug;
       if (
-        !store ||
-        actor!.tenantId !== store.tenantId ||
+        (!personal && (!store || actor!.tenantId !== store.tenantId)) ||
         actor!.email.toLowerCase() !== identity.email
       )
         throw new BadRequestException(
@@ -116,11 +154,16 @@ export class IdentityService {
         const existing = this.context.repository.get<{ userId: string }>(
           'system',
           'google_accounts',
-          key,
+          personal ? `${actor!.tenantId}:${identity.sub}` : key,
         );
         if (existing && existing.userId !== actor!.id)
           throw new BadRequestException('Esta identidade Google já está vinculada a outra conta.');
-        this.context.repository.put('system', 'google_accounts', key, { userId: actor!.id });
+        this.context.repository.put(
+          'system',
+          'google_accounts',
+          personal ? `${actor!.tenantId}:${identity.sub}` : key,
+          { userId: actor!.id },
+        );
       });
       return { linked: true };
     }
@@ -151,10 +194,20 @@ export class IdentityService {
         ];
       });
     const memberships = stores.filter((store) => store.customer && store.customer.active !== false);
-    if(memberships.length) {
-      const identityId=memberships[0].customer!.identityId || memberships[0].customer!.id;
-      for(const membership of memberships) { const user={...membership.customer!,identityId,emailVerified:true};this.context.repository.put(user.tenantId,'customers',user.id,user);membership.customer=user; }
-      this.context.repository.put('system','google_persons',identityId,{identityId,sub:identity.sub});
+    const personal = this.customerAccounts.google(identity.sub);
+    if (personal && !memberships.some((member) => member.customer!.role !== 'customer'))
+      return { status: 'authenticated', ...this.session(personal) };
+    if (memberships.length) {
+      const identityId = memberships[0].customer!.identityId || memberships[0].customer!.id;
+      for (const membership of memberships) {
+        const user = { ...membership.customer!, identityId, emailVerified: true };
+        this.context.repository.put(user.tenantId, 'customers', user.id, user);
+        membership.customer = user;
+      }
+      this.context.repository.put('system', 'google_persons', identityId, {
+        identityId,
+        sub: identity.sub,
+      });
     }
     if (memberships.length === 1)
       return { status: 'authenticated', ...this.session(memberships[0].customer!) };
@@ -171,6 +224,8 @@ export class IdentityService {
     return {
       status: 'onboarding_required',
       enrollmentToken,
+      existingAccount: this.customerAccounts.all(identity.email).length > 0,
+      personalAccountExists: !!this.customerAccounts.find(identity.email),
       profile: { name: identity.name, email: identity.email },
       stores: stores.map(({ customer, ...store }) => store),
     };
@@ -204,17 +259,43 @@ export class IdentityService {
         throw new UnauthorizedException('Confirmação expirada. Entre com Google novamente.');
       if (identity.inviteToken) {
         if (!input.phone) throw new BadRequestException('Informe seu telefone.');
-        const existing = this.context.repository.list<{tenantId:string}>('system','stores').flatMap(store => this.context.repository.list<Customer>(store.tenantId,'customers')).find(user => user.email === identity.email);
+        const existing = this.customerAccounts.all(identity.email)[0];
         // Google proves this e-mail; it may link to a pre-existing password account only through the existing explicit proof flow.
-        const linked = this.context.repository.list<{identityId:string;sub:string}>('system','google_persons').find(person => person.sub === identity.sub);
-        let person = linked && this.context.repository.list<{tenantId:string}>('system','stores').flatMap(store => this.context.repository.list<Customer>(store.tenantId,'customers',{identityId:linked.identityId}))[0];
-        if (!person && existing) throw new BadRequestException('Entre na sua conta existente para aceitar o convite.');
-        person ||= {id:id(),tenantId:'',role:'customer',name:identity.name,email:identity.email,phone:input.phone,passwordHash:hashPassword(randomBytes(48).toString('hex')),addresses:[],emailVerified:true};
-        const member = this.memberships.acceptInTransaction(identity.inviteToken,person);
-        this.context.repository.put('system','google_accounts',`${member.tenantId}:${identity.sub}`,{userId:member.id});
-        this.context.repository.put('system','google_persons',member.identityId || member.id,{identityId:member.identityId || member.id,sub:identity.sub,userId:member.id});
-        this.context.repository.remove('system','google_enrollments',key);
-        return {status:'authenticated',...this.session(member)};
+        const linked = this.context.repository
+          .list<{ identityId: string; sub: string }>('system', 'google_persons')
+          .find((person) => person.sub === identity.sub);
+        let person =
+          linked &&
+          this.customerAccounts
+            .all()
+            .find((user) => (user.identityId || user.id) === linked.identityId);
+        if (!person && existing)
+          throw new BadRequestException('Entre na sua conta existente para aceitar o convite.');
+        person ||= {
+          id: id(),
+          tenantId: '',
+          role: 'customer',
+          name: identity.name,
+          email: identity.email,
+          phone: input.phone,
+          passwordHash: hashPassword(randomBytes(48).toString('hex')),
+          addresses: [],
+          emailVerified: true,
+        };
+        const member = this.memberships.acceptInTransaction(identity.inviteToken, person);
+        this.context.repository.put(
+          'system',
+          'google_accounts',
+          `${member.tenantId}:${identity.sub}`,
+          { userId: member.id },
+        );
+        this.context.repository.put('system', 'google_persons', member.identityId || member.id, {
+          identityId: member.identityId || member.id,
+          sub: identity.sub,
+          userId: member.id,
+        });
+        this.context.repository.remove('system', 'google_enrollments', key);
+        return { status: 'authenticated', ...this.session(member) };
       }
       const store = this.context.repository.get<{ tenantId: string }>(
         'system',
@@ -234,7 +315,25 @@ export class IdentityService {
         `${input.slug}:${identity.email}`,
       );
       let result;
-      if (linked) {
+      if (!input.slug && input.role === 'customer') {
+        if (this.customerAccounts.all(identity.email).length) {
+          if (!input.password)
+            throw new BadRequestException('Confirme a senha da sua conta para vincular o Google.');
+          const login = this.login({ email: identity.email, password: input.password });
+          if (!('user' in login))
+            throw new BadRequestException('Selecione seu acesso existente para vincular o Google.');
+          result = login;
+        } else {
+          if (!input.phone) throw new BadRequestException('Informe seu telefone.');
+          result = this.createAccount({
+            role: 'customer',
+            phone: input.phone,
+            name: identity.name,
+            email: identity.email,
+            password: randomBytes(48).toString('hex'),
+          });
+        }
+      } else if (linked) {
         const customer = this.context.repository.get<Customer>(
           store!.tenantId,
           'customers',
@@ -268,37 +367,96 @@ export class IdentityService {
         `${result.user.tenantId}:${identity.sub}`,
         { userId: result.user.id },
       );
-      const verified={...this.context.require<Customer>(result.user,'customers',result.user.id),emailVerified:true};
-      this.context.repository.put(verified.tenantId,'customers',verified.id,verified);
-      result.user=this.publicUser(verified);
-      this.context.repository.put('system','google_persons',verified.identityId || verified.id,{identityId:verified.identityId || verified.id,sub:identity.sub});
+      const verified = {
+        ...this.context.require<Customer>(result.user, 'customers', result.user.id),
+        emailVerified: true,
+      };
+      this.context.repository.put(verified.tenantId, 'customers', verified.id, verified);
+      result.user = this.publicUser(verified);
+      this.context.repository.put('system', 'google_persons', verified.identityId || verified.id, {
+        identityId: verified.identityId || verified.id,
+        sub: identity.sub,
+      });
       this.context.repository.remove('system', 'google_enrollments', key);
       return { status: 'authenticated', ...result };
     });
   }
   publicUser(customer: Customer): Actor {
-    const { id, tenantId, role, name, email, phone, identityId, professionalId, active, emailVerified } = customer;
-    return { id, tenantId, role, name, email, phone, identityId, professionalId, active, emailVerified };
+    const {
+      id,
+      tenantId,
+      role,
+      name,
+      email,
+      phone,
+      identityId,
+      professionalId,
+      active,
+      emailVerified,
+    } = customer;
+    const storeSelected = !!this.context.repository.get(tenantId, 'settings', 'business');
+    return {
+      id,
+      tenantId,
+      role,
+      name,
+      email,
+      phone,
+      identityId,
+      professionalId,
+      active,
+      emailVerified,
+      storeSelected,
+    };
   }
   register(body: unknown) {
-    const input=parse(registrationSchema,body);
-    const fingerprint=tokenHash(JSON.stringify({...input,password:undefined,idempotencyKey:undefined}));
+    const input = parse(registrationSchema, body);
+    const fingerprint = tokenHash(
+      JSON.stringify({ ...input, password: undefined, idempotencyKey: undefined }),
+    );
     return this.context.repository.transaction(() => {
-      const key=input.idempotencyKey;
-      const previous=key && this.context.repository.get<{tenantId:string;userId:string;fingerprint:string;expiresAt:number}>('system','registration_keys',key);
-      if(previous) {
-        const user=this.context.repository.get<Customer>(previous.tenantId,'customers',previous.userId);
-        if(previous.fingerprint!==fingerprint || !user || !verifyPassword(input.password,user.passwordHash))throw new ConflictException('Tentativa de cadastro já utilizada com outros dados.');
+      const key = input.idempotencyKey;
+      const previous =
+        key &&
+        this.context.repository.get<{
+          tenantId: string;
+          userId: string;
+          fingerprint: string;
+          expiresAt: number;
+        }>('system', 'registration_keys', key);
+      if (previous) {
+        const user = this.context.repository.get<Customer>(
+          previous.tenantId,
+          'customers',
+          previous.userId,
+        );
+        if (
+          previous.fingerprint !== fingerprint ||
+          !user ||
+          !verifyPassword(input.password, user.passwordHash)
+        )
+          throw new ConflictException('Tentativa de cadastro já utilizada com outros dados.');
         return this.session(user);
       }
-      if(input.role==='admin' && !input.slug && this.stores().some(store=>this.context.repository.get('system','accounts',`${store.slug}:${input.email}`))) throw new ConflictException('Você já tem uma conta. Entre para acessar seu negócio.');
-      const result=this.createAccount(input);
-      if(key)this.context.repository.put('system','registration_keys',key,{tenantId:result.user.tenantId,userId:result.user.id,fingerprint,expiresAt:Date.now()+86400000});
+      if (input.role === 'admin' && !input.slug && this.customerAccounts.all(input.email).length)
+        throw new ConflictException('Você já tem uma conta. Entre para acessar seu negócio.');
+      const result = this.createAccount(input);
+      if (key)
+        this.context.repository.put('system', 'registration_keys', key, {
+          tenantId: result.user.tenantId,
+          userId: result.user.id,
+          fingerprint,
+          expiresAt: Date.now() + 86400000,
+        });
       return result;
     });
   }
   private createAccount(body: unknown) {
     const parsed = parse(registrationSchema, body);
+    if (parsed.role === 'customer' && !parsed.slug)
+      return this.session(this.customerAccounts.create(parsed));
+    if (parsed.role === 'customer' && this.customerAccounts.find(parsed.email))
+      throw new ConflictException('Você já possui conta. Entre para acessar o estabelecimento.');
     const input = {
       ...parsed,
       slug: parsed.slug || (parsed.role === 'admin' ? `loja-${id()}` : ''),
@@ -367,8 +525,11 @@ export class IdentityService {
       this.attempts.set(key, { count: 1, since: Date.now() });
     else attempt.count++;
     if (this.attempts.size > 10000) this.attempts.clear();
-    const passwordChecks=new Map<string,boolean>();
-    const validPassword=(hash:string)=>{if(!passwordChecks.has(hash))passwordChecks.set(hash,verifyPassword(input.password,hash));return passwordChecks.get(hash)!;};
+    const passwordChecks = new Map<string, boolean>();
+    const validPassword = (hash: string) => {
+      if (!passwordChecks.has(hash)) passwordChecks.set(hash, verifyPassword(input.password, hash));
+      return passwordChecks.get(hash)!;
+    };
     const matches = this.stores()
       .filter((store) => !input.slug || store.slug === input.slug)
       .flatMap((store) => {
@@ -380,10 +541,17 @@ export class IdentityService {
         const customer =
           account &&
           this.context.repository.get<Customer>(account.tenantId, 'customers', account.userId);
-        return customer && validPassword(customer.passwordHash)
-          ? [{ store, customer }]
-          : [];
+        return customer && validPassword(customer.passwordHash) ? [{ store, customer }] : [];
       });
+    const personal = !input.slug && this.customerAccounts.find(input.email);
+    if (
+      personal &&
+      validPassword(personal.passwordHash) &&
+      !matches.some((match) => match.customer.role !== 'customer')
+    ) {
+      this.attempts.delete(key);
+      return this.session(personal);
+    }
     if (!matches.length) throw new UnauthorizedException('E-mail ou senha inválidos.');
     if (matches.length > 1)
       return {
@@ -395,10 +563,11 @@ export class IdentityService {
   }
 
   session(customer: Customer) {
-    if (customer.active === false) throw new UnauthorizedException('Acesso desativado. Fale com o responsável.');
+    if (customer.active === false)
+      throw new UnauthorizedException('Acesso desativado. Fale com o responsável.');
     if (!customer.identityId) {
-      customer = {...customer,identityId:customer.id};
-      this.context.repository.put(customer.tenantId,'customers',customer.id,customer);
+      customer = { ...customer, identityId: customer.id };
+      this.context.repository.put(customer.tenantId, 'customers', customer.id, customer);
     }
     const token = randomBytes(32).toString('hex');
     this.context.repository.put(
@@ -408,7 +577,12 @@ export class IdentityService {
       {
         userId: customer.id,
         tenantId: customer.tenantId,
-        credentialVersion: this.context.repository.get<{version:number}>(customer.tenantId,'credential_epochs',customer.id)?.version || 0,
+        credentialVersion:
+          this.context.repository.get<{ version: number }>(
+            customer.tenantId,
+            'credential_epochs',
+            customer.id,
+          )?.version || 0,
         expiresAt: Date.now() + 1000 * 60 * 60 * 24,
       },
     );
@@ -421,8 +595,15 @@ export class IdentityService {
       credentialVersion?: number;
       expiresAt: number;
     }>('system', 'sessions', createHash('sha256').update(token).digest('hex'));
-    const epoch=session && this.context.repository.get<{version:number}>(session.tenantId,'credential_epochs',session.userId);
-    if (epoch && (session?.credentialVersion || 0) !== epoch.version) throw new UnauthorizedException('Entre novamente após redefinir sua senha.');
+    const epoch =
+      session &&
+      this.context.repository.get<{ version: number }>(
+        session.tenantId,
+        'credential_epochs',
+        session.userId,
+      );
+    if (epoch && (session?.credentialVersion || 0) !== epoch.version)
+      throw new UnauthorizedException('Entre novamente após redefinir sua senha.');
     if (!session || session.expiresAt < Date.now())
       throw new UnauthorizedException('Sua sessão expirou. Entre novamente.');
     const customer = this.context.repository.get<Customer>(
