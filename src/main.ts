@@ -63,9 +63,9 @@ const guard: CanActivate = {
       const path = httpRequest.path.replace(/^\/v1\//, '');
       const allowed =
         httpRequest.method === 'GET'
-          ? /^(auth\/me|customers\/profile)$/.test(path)
+          ? /^(auth\/(me|last-visit)|customers\/profile)$/.test(path)
           : httpRequest.method === 'POST'
-            ? /^(auth\/(logout|switch-store|email\/request|invite\/accept|google\/link)|customers\/addresses)$/.test(
+            ? /^(auth\/(logout|switch-store|last-visit\/review|email\/request|invite\/accept|google\/link)|customers\/addresses)$/.test(
                 path,
               )
             : httpRequest.method === 'PATCH' &&

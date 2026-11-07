@@ -6,10 +6,11 @@ import { PublicStoreController } from './infrastructure/controller/public-store.
 import { IdentityService } from './application/identity-service.js';
 import { IdentityController } from './infrastructure/controller/identity.controller.js';
 import { GoogleIdentity } from './application/google-identity.js';
+import { CustomerHistoryController } from './infrastructure/controller/customer-history.controller.js';
 @Global()
 @Module({
   imports: [CatalogModule, FeedbackModule, ProfessionalsModule],
-  controllers: [IdentityController, PublicStoreController],
+  controllers: [IdentityController, PublicStoreController, CustomerHistoryController],
   providers: [IdentityService, GoogleIdentity],
   exports: [IdentityService],
 })
