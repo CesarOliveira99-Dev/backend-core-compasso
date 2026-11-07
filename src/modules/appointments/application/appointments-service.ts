@@ -17,6 +17,7 @@ import {
   localWeekday,
 } from '../../../core/domain/policies.js';
 import { bookingSchema } from './appointments.schemas.js';
+import { queueAppointmentMail } from '../../notifications/application/appointment-mail.js';
 import { ProfessionalsService } from '../../professionals/professionals.module.js';
 @Injectable()
 export class AppointmentsService {
@@ -231,6 +232,7 @@ export class AppointmentsService {
       'Novo agendamento',
       `${customer.name} solicitou ${item.name}.`,
     );
+    queueAppointmentMail(this.context, actor, appointment, 'confirmation');
     return appointment;
   }
   transition(actor: Actor, appointmentId: string, body: unknown) {
@@ -320,6 +322,8 @@ export class AppointmentsService {
         appointment.paymentStatus = 'paid';
         appointment.paidAt ??= timestamp();
       }
+      if (input.startsAt && input.startsAt !== this.context.require<Appointment>(actor, 'appointments', appointment.id).startsAt)
+        queueAppointmentMail(this.context, actor, appointment, 'confirmation');
       return this.context.repository.put(
         actor.tenantId,
         'appointments',

@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Context, timestamp } from '../../../core/application/context.js';
 import type { Actor, Appointment, Loyalty, Settings } from '../../../core/domain/models.js';
 import { localDate } from '../../../core/domain/policies.js';
+import { queueAppointmentMail } from './appointment-mail.js';
 @Injectable()
 export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
@@ -40,6 +41,7 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
         .filter((a) => a.status === 'confirmed')) {
         const until = new Date(appointment.startsAt).getTime() - now.getTime();
         if (until > 0 && until <= 3600000) {
+          queueAppointmentMail(this.context, admin, appointment, 'reminder', now.getTime());
           this.context.notify(
             admin,
             appointment.customerId,
