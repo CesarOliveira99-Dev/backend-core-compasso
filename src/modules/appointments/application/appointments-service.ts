@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { freeSlots, scheduleWindow, slotIssue, validCalendarDate } from '../domain/availability.js';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { Context, id, parse, timestamp } from '../../../core/application/context.js';
 import type {
@@ -14,61 +15,149 @@ import {
   discountedPrice,
   localDate,
   localWeekday,
-  overlaps,
 } from '../../../core/domain/policies.js';
 import { bookingSchema } from './appointments.schemas.js';
+import { ProfessionalsService } from '../../professionals/professionals.module.js';
 @Injectable()
 export class AppointmentsService {
-  constructor(private readonly context: Context) {}
+  constructor(
+    private readonly context: Context,
+    private readonly professionals: ProfessionalsService,
+  ) {}
   list(actor: Actor): Appointment[] {
     return this.context.repository
       .list<Appointment>(
         actor.tenantId,
         'appointments',
-        actor.role === 'admin' ? {} : { customerId: actor.id },
+        actor.role === 'admin' ? {} : actor.role === 'employee' ? {professionalId: actor.professionalId || '__none__'} : { customerId: actor.id },
       )
-      .filter((a) => actor.role === 'admin' || a.customerId === actor.id)
+      .filter((a) => actor.role === 'admin' || (actor.role === 'employee' ? a.professionalId === actor.professionalId : a.customerId === actor.id))
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
   }
-  validateSlot(actor: Actor, startsAt: string, durationMinutes: number, ignoreId?: string) {
-    const settings = this.context.settings(actor);
-    const start = new Date(startsAt);
-    const end = new Date(start.getTime() + durationMinutes * 60000);
-    if (start < new Date()) throw new BadRequestException('Escolha um horário futuro.');
-    const hour = Number(
-      new Intl.DateTimeFormat('en-GB', {
-        timeZone: settings.timezone,
-        hour: '2-digit',
-        hourCycle: 'h23',
-      }).format(start),
-    );
-    const endHour = Number(
-      new Intl.DateTimeFormat('en-GB', {
-        timeZone: settings.timezone,
-        hour: '2-digit',
-        minute: '2-digit',
-        hourCycle: 'h23',
-      })
-        .format(end)
-        .split(':')
-        .reduce((s, n, i) => s + Number(n) / (i ? 60 : 1), 0),
-    );
-    if (
-      !settings.workDays.includes(localWeekday(start, settings.timezone)) ||
-      hour < settings.openingHour ||
-      endHour > settings.closingHour ||
-      localDate(start, settings.timezone) !== localDate(end, settings.timezone)
-    )
-      throw new BadRequestException('Horário fora do expediente.');
-    const appointments = this.context.repository
+  private access(actor:Actor, appointment:Appointment) {
+    if (actor.role === 'employee') {
+      if (!actor.professionalId || appointment.professionalId !== actor.professionalId) throw new ForbiddenException('Atendimento de outro profissional.');
+    } else this.context.owned(actor,appointment.customerId);
+  }
+  private reservations(actor: Actor, professionalId: string, ignoreId?: string) {
+    return this.context.repository
       .list<Appointment>(actor.tenantId, 'appointments')
-      .filter((a) => a.id !== ignoreId);
-    if (overlaps(start.toISOString(), end.toISOString(), appointments))
+      .filter(
+        (appointment) =>
+          appointment.id !== ignoreId &&
+          (appointment.professionalId || 'principal') === professionalId,
+      );
+  }
+  private servicePrice(actor: Actor, item: CatalogItem, startsAt: string) {
+    const percent = Math.max(
+      0,
+      ...this.context.repository
+        .list<Discount>(actor.tenantId, 'promotions')
+        .filter((promotion) =>
+          discountApplies(
+            promotion,
+            item.id,
+            item.kind,
+            new Date(),
+            localWeekday(startsAt, this.context.settings(actor).timezone),
+          ),
+        )
+        .map((promotion) => promotion.percent),
+    );
+    return discountedPrice(item.priceCents, percent);
+  }
+  availability(actor: Actor, query: unknown) {
+    const input = parse(
+      z.object({
+        itemId: z.string().min(1).max(100),
+        professionalId: z.string().min(1).max(100),
+        date: z.string().refine(validCalendarDate, 'Escolha uma data válida.'),
+        appointmentId: z.string().max(100).optional(),
+      }),
+      query,
+    );
+    const item = this.context.require<CatalogItem>(actor, 'catalog', input.itemId);
+    if (!item.active || item.kind !== 'service')
+      throw new BadRequestException('Serviço indisponível.');
+    const professional = this.professionals.resolve(actor, item.id, input.professionalId);
+    let durationMinutes = item.durationMinutes;
+    let priceCents: number | undefined;
+    if (input.appointmentId) {
+      const appointment = this.context.require<Appointment>(
+        actor,
+        'appointments',
+        input.appointmentId,
+      );
+      this.access(actor, appointment);
+      if (
+        appointment.itemId !== item.id ||
+        (appointment.professionalId || 'principal') !== professional.id ||
+        ['cancelled', 'completed'].includes(appointment.status)
+      )
+        throw new BadRequestException('Este atendimento não pode ser reagendado nesta agenda.');
+      durationMinutes = (Date.parse(appointment.endsAt) - Date.parse(appointment.startsAt)) / 60000;
+      priceCents = appointment.priceCents;
+    }
+    const settings = this.context.settings(actor);
+    return {
+      date: input.date,
+      timezone: settings.timezone,
+      durationMinutes,
+      priceCents: priceCents ?? this.servicePrice(actor, item, `${input.date}T12:00:00Z`),
+      slots: freeSlots(
+        scheduleWindow(input.date, settings, professional),
+        durationMinutes,
+        this.reservations(actor, professional.id, input.appointmentId),
+        settings.timezone,
+      ),
+    };
+  }
+  validateSlot(
+    actor: Actor,
+    startsAt: string,
+    durationMinutes: number,
+    ignoreId?: string,
+    professionalId = 'principal',
+  ) {
+    const settings = this.context.settings(actor);
+    const professional = this.professionals
+      .list(actor)
+      .find((profile) => profile.id === professionalId && profile.active);
+    if (!professional) throw new BadRequestException('Profissional indisponível.');
+    const start = Date.parse(startsAt),
+      end = start + durationMinutes * 60000;
+    const issue = slotIssue(
+      start,
+      end,
+      scheduleWindow(localDate(startsAt, settings.timezone), settings, professional),
+      this.reservations(actor, professionalId, ignoreId),
+      Date.now(),
+    );
+    if (issue === 'past') throw new BadRequestException('Escolha um horário futuro.');
+    if (issue === 'hours')
+      throw new BadRequestException('Horário fora do expediente, em intervalo ou dia de folga.');
+    if (issue === 'busy')
       throw new ConflictException('Este horário já está reservado. Escolha outro horário.');
-    return end.toISOString();
+    return new Date(end).toISOString();
   }
   create(actor: Actor, body: unknown, orderId?: string, priceCents?: number): Appointment {
     const input = parse(bookingSchema, body);
+    const fingerprint = JSON.stringify(input);
+    const key =
+      input.idempotencyKey && !orderId ? `${actor.id}:${input.idempotencyKey}` : undefined;
+    const previous =
+      key &&
+      this.context.repository.get<{ appointmentId: string; fingerprint: string }>(
+        actor.tenantId,
+        'booking_keys',
+        key,
+      );
+    if (previous) {
+      if (previous.fingerprint !== fingerprint)
+        throw new BadRequestException('Chave já utilizada em outro agendamento.');
+      return this.context.require<Appointment>(actor, 'appointments', previous.appointmentId);
+    }
+
     const item = this.context.require<CatalogItem>(actor, 'catalog', input.itemId);
     if (!item.active || item.kind !== 'service')
       throw new BadRequestException('Serviço indisponível.');
@@ -78,36 +167,33 @@ export class AppointmentsService {
     if (customer.role !== 'customer') throw new BadRequestException('Selecione um cliente.');
     if (item.requiresTriage && input.notes.trim().length < 5)
       throw new BadRequestException('Descreva sua necessidade para a triagem.');
-    const endsAt = this.validateSlot(actor, input.startsAt, item.durationMinutes);
+    const professional = this.professionals.resolve(actor, item.id, input.professionalId);
+    const endsAt = this.validateSlot(
+      actor,
+      input.startsAt,
+      item.durationMinutes,
+      undefined,
+      professional.id,
+    );
     const settings = this.context.settings(actor);
     if (actor.role === 'customer' && !settings.payOnAppointment && !orderId)
       throw new BadRequestException(
         'Agendamentos com pagamento no dia estão desabilitados. Entre em contato com o estabelecimento.',
       );
-    const promotions = this.context.repository.list<Discount>(actor.tenantId, 'promotions');
-    const percent = Math.max(
-      0,
-      ...promotions
-        .filter((p) =>
-          discountApplies(
-            p,
-            item.id,
-            item.kind,
-            new Date(),
-            localWeekday(input.startsAt, settings.timezone),
-          ),
-        )
-        .map((p) => p.percent),
-    );
+    const currentPrice = priceCents ?? this.servicePrice(actor, item, input.startsAt);
+    if (input.expectedPriceCents !== undefined && input.expectedPriceCents !== currentPrice)
+      throw new BadRequestException('O valor foi atualizado. Confira o resumo antes de confirmar.');
     const appointment: Appointment = {
       id: id(),
       customerId,
       customerName: customer.name,
       itemId: item.id,
       itemName: item.name,
+      professionalId: professional.id,
+      professionalName: professional.name,
       startsAt: input.startsAt,
       endsAt,
-      priceCents: priceCents ?? discountedPrice(item.priceCents, percent),
+      priceCents: currentPrice,
       status: item.requiresTriage ? 'pending' : 'confirmed',
       paymentStatus: 'pending',
       notes: input.notes,
@@ -115,6 +201,11 @@ export class AppointmentsService {
       createdAt: timestamp(),
     };
     this.context.repository.put(actor.tenantId, 'appointments', appointment.id, appointment);
+    if (key)
+      this.context.repository.put(actor.tenantId, 'booking_keys', key, {
+        appointmentId: appointment.id,
+        fingerprint,
+      });
     if (item.requiresTriage) {
       const triage: Triage = {
         id: id(),
@@ -134,6 +225,7 @@ export class AppointmentsService {
       item.requiresTriage ? 'Solicitação em triagem' : 'Agendamento confirmado',
       `${item.name} • ${new Date(input.startsAt).toLocaleString('pt-BR', { timeZone: this.context.settings(actor).timezone })}`,
     );
+    if(professional.userId) this.context.notify(actor,professional.userId,'Novo atendimento',`${customer.name} • ${item.name} • ${input.startsAt}`);
     this.context.notifyAdmins(
       actor,
       'Novo agendamento',
@@ -152,8 +244,8 @@ export class AppointmentsService {
     );
     return this.context.repository.transaction(() => {
       const appointment = this.context.require<Appointment>(actor, 'appointments', appointmentId);
-      this.context.owned(actor, appointment.customerId);
-      if (input.paymentStatus || input.status === 'completed') this.context.admin(actor);
+      this.access(actor, appointment);
+      if (input.paymentStatus || (input.status === 'completed' && actor.role !== 'employee')) this.context.admin(actor);
       if (input.startsAt) {
         if (appointment.status === 'completed' || appointment.status === 'cancelled')
           throw new BadRequestException('Este atendimento não pode ser reagendado.');
@@ -163,7 +255,24 @@ export class AppointmentsService {
           (new Date(appointment.endsAt).getTime() - new Date(appointment.startsAt).getTime()) /
             60000,
           appointment.id,
+          appointment.professionalId || 'principal',
         );
+        if (appointment.orderId) {
+          const order = this.context.require<import('../../../core/domain/models.js').Order>(
+            actor,
+            'orders',
+            appointment.orderId,
+          );
+          const items = order.items.map((line) =>
+            line.kind === 'service' &&
+            line.itemId === appointment.itemId &&
+            line.startsAt === appointment.startsAt &&
+            (line.professionalId || 'principal') === (appointment.professionalId || 'principal')
+              ? { ...line, startsAt: input.startsAt }
+              : line,
+          );
+          this.context.repository.put(actor.tenantId, 'orders', order.id, { ...order, items });
+        }
         appointment.startsAt = input.startsAt;
       }
       if (input.status) {
@@ -197,6 +306,15 @@ export class AppointmentsService {
           );
       }
       if (input.paymentStatus) {
+        if (
+          appointment.orderId &&
+          this.context.require<import('../../../core/domain/models.js').Order>(
+            actor,
+            'orders',
+            appointment.orderId,
+          ).paymentMethod === 'online'
+        )
+          throw new BadRequestException('O Mercado Pago confirma este pagamento automaticamente.');
         if (appointment.status === 'cancelled')
           throw new BadRequestException('Atendimento cancelado.');
         appointment.paymentStatus = 'paid';

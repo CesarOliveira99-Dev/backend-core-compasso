@@ -5,3 +5,6 @@ symlink: false
 storeDir: .pnpm-store
 packageImportMethod: copy
 enableGlobalVirtualStore: false
+
+overrides:
+  multer: ^2.5.0

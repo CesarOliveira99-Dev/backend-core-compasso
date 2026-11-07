@@ -1,4 +1,5 @@
 export interface Feedback {
+  published?: boolean;
   id: string;
   customerId: string;
   customerName: string;

@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { mediaAssetSchema } from '../../settings/application/business-profile.schemas.js';
 
 export const itemSchema = z
   .object({
+    media: z.array(mediaAssetSchema).max(6).optional(),
     name: z.string().trim().min(2).max(100),
     description: z.string().max(1000).default(''),
     kind: z.enum(['service', 'product']),

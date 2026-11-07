@@ -23,10 +23,6 @@ export class CheckoutService {
     if (actor.role !== 'customer')
       throw new BadRequestException('Utilize a conta de cliente para realizar uma compra.');
     const input = parse(checkoutSchema, body);
-    if (input.paymentMethod === 'online')
-      throw new BadRequestException(
-        'Pagamento online ainda não foi habilitado. Gateway pendente de configuração.',
-      );
     return this.context.repository.transaction(() => {
       const existing = this.context.repository.get<{ orderId: string; fingerprint: string }>(
         actor.tenantId,
@@ -48,7 +44,12 @@ export class CheckoutService {
         if (line.kind === 'service')
           this.appointments.create(
             actor,
-            { itemId: line.itemId, startsAt: line.startsAt, notes: input.items[index].notes || '' },
+            {
+              itemId: line.itemId,
+              professionalId: line.professionalId,
+              startsAt: line.startsAt,
+              notes: input.items[index].notes || '',
+            },
             order.id,
             line.unitPriceCents,
           );
@@ -109,9 +110,14 @@ export class CheckoutService {
     return { totalCents: order.totalCents, discountCents: order.discountCents, items: order.items };
   }
   private prepare(actor: Actor, input: z.output<typeof checkoutSchema>) {
-    if (input.paymentMethod === 'online')
-      throw new BadRequestException('Pagamento online ainda não foi habilitado.');
     const settings = this.context.settings(actor);
+    if (
+      input.paymentMethod === 'online' &&
+      !this.context.repository.get(actor.tenantId, 'payment_connections', 'mercadopago')
+    )
+      throw new BadRequestException('O comerciante ainda não conectou o Mercado Pago.');
+    if (input.paymentMethod === 'pix_manual' && !settings.pixKey.trim())
+      throw new BadRequestException('O comerciante ainda não cadastrou uma chave Pix.');
     const now = new Date();
     const customer = this.context.require<Customer>(actor, 'customers', actor.id);
     const promotions = this.context.repository.list<Discount>(actor.tenantId, 'promotions');
@@ -138,8 +144,9 @@ export class CheckoutService {
       if (item.kind === 'service' && (!line.startsAt || line.quantity !== 1))
         throw new BadRequestException('Escolha um horário por serviço.');
       if (
-        (item.kind === 'service' && !settings.payOnAppointment) ||
-        (item.kind === 'product' && !settings.payOnDelivery)
+        input.paymentMethod === 'on_day' &&
+        ((item.kind === 'service' && !settings.payOnAppointment) ||
+          (item.kind === 'product' && !settings.payOnDelivery))
       )
         throw new BadRequestException('Pagamento no dia indisponível para um dos itens.');
       const weekday = localWeekday(line.startsAt || now, settings.timezone);
@@ -162,6 +169,7 @@ export class CheckoutService {
         kind: item.kind,
         unitPriceCents,
         startsAt: line.startsAt,
+        professionalId: line.professionalId,
       };
     });
     if (coupon && !couponUsed)
@@ -182,6 +190,7 @@ export class CheckoutService {
       status: 'pending',
       paymentStatus: 'pending',
       paymentMethod: input.paymentMethod,
+      pixKey: input.paymentMethod === 'pix_manual' ? settings.pixKey : undefined,
       address: hasProduct ? address : undefined,
       seen: false,
       createdAt: timestamp(),
@@ -200,6 +209,8 @@ export class CheckoutService {
     );
     return this.context.repository.transaction(() => {
       const order = this.context.require<Order>(actor, 'orders', orderId);
+      if (input.paymentStatus && order.paymentMethod === 'online')
+        throw new BadRequestException('O Mercado Pago confirma este pagamento automaticamente.');
       if (order.status === 'cancelled') throw new BadRequestException('Pedido cancelado.');
       if (
         input.status &&

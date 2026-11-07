@@ -13,6 +13,10 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { PromotionsModule } from './modules/promotions/promotions.module.js';
 import { SettingsModule } from './modules/settings/settings.module.js';
 import { TriageModule } from './modules/triage/triage.module.js';
+import { PaymentsModule } from './modules/payments/payments.module.js';
+import { HealthController } from './health.controller.js';
+import { MediaModule } from './modules/media/media.module.js';
+import { ProfessionalsModule } from './modules/professionals/professionals.module.js';
 @Global()
 @Module({
   providers: [{ provide: REPOSITORY, useClass: DocumentRepository }, Context],
@@ -20,8 +24,10 @@ import { TriageModule } from './modules/triage/triage.module.js';
 })
 class CoreModule {}
 @Module({
+  controllers: [HealthController],
   imports: [
     CoreModule,
+    MediaModule,
     IdentityModule,
     CatalogModule,
     CustomersModule,
@@ -34,6 +40,8 @@ class CoreModule {}
     NotificationsModule,
     SettingsModule,
     InsightsModule,
+    PaymentsModule,
+    ProfessionalsModule,
   ],
 })
 export class AppModule {}

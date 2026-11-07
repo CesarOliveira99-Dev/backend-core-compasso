@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: compasso-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /v1/health
+    disk:
+      name: compasso-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: SEED_DEMO
+        value: 'false'
+      - key: COMPASSO_MONTHLY_PRICE_CENTS
+        value: '0'
+      - key: COMPASSO_RECOMMENDATION_PRICE_CENTS
+        value: '0'
+      - key: MP_SANDBOX
+        value: 'true'

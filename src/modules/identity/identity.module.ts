@@ -1,10 +1,16 @@
 import { Global, Module } from '@nestjs/common';
+import { CatalogModule } from '../catalog/catalog.module.js';
+import { FeedbackModule } from '../feedback/feedback.module.js';
+import { ProfessionalsModule } from '../professionals/professionals.module.js';
+import { PublicStoreController } from './infrastructure/controller/public-store.controller.js';
 import { IdentityService } from './application/identity-service.js';
 import { IdentityController } from './infrastructure/controller/identity.controller.js';
+import { GoogleIdentity } from './application/google-identity.js';
 @Global()
 @Module({
-  controllers: [IdentityController],
-  providers: [IdentityService],
+  imports: [CatalogModule, FeedbackModule, ProfessionalsModule],
+  controllers: [IdentityController, PublicStoreController],
+  providers: [IdentityService, GoogleIdentity],
   exports: [IdentityService],
 })
 export class IdentityModule {}

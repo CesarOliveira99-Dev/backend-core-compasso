@@ -5,6 +5,8 @@ export interface Appointment {
   customerName: string;
   itemId: string;
   itemName: string;
+  professionalId?: string;
+  professionalName?: string;
   startsAt: string;
   endsAt: string;
   priceCents: number;
