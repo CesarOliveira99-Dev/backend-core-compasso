@@ -1,11 +1,43 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
-import { Context, parse } from '../../../core/application/context.js';
+import { Context, parse, timestamp } from '../../../core/application/context.js';
+import type { Expense } from '../domain/expense.js';
 import type { Actor, Appointment, Feedback, Order, Triage } from '../../../core/domain/models.js';
 import { dailySummary, localDate, weekRange } from '../../../core/domain/policies.js';
 @Injectable()
 export class InsightsService {
   constructor(private readonly context: Context) {}
+  saveExpense(actor: Actor, expenseId: string, body: unknown) {
+    this.context.admin(actor);
+    parse(z.uuid(), expenseId);
+    const today = localDate(new Date(), this.context.settings(actor).timezone);
+    const input = parse(
+      z
+        .object({
+          description: z.string().trim().min(2).max(150),
+          category: z.enum(['supplies', 'rent', 'utilities', 'other']),
+          amountCents: z.number().int().positive().max(100_000_000),
+          paidOn: z.iso
+            .date()
+            .refine((date) => date <= today, 'Informe uma data de pagamento até hoje.'),
+        })
+        .strict(),
+      body,
+    );
+    const previous = this.context.repository.get<Expense>(actor.tenantId, 'expenses', expenseId);
+    const expense: Expense = {
+      ...input,
+      id: expenseId,
+      createdAt: previous?.createdAt || timestamp(),
+    };
+    return this.context.repository.put(actor.tenantId, 'expenses', expenseId, expense);
+  }
+  removeExpense(actor: Actor, expenseId: string) {
+    this.context.admin(actor);
+    this.context.require<Expense>(actor, 'expenses', expenseId);
+    this.context.repository.remove(actor.tenantId, 'expenses', expenseId);
+    return { removed: true };
+  }
   dashboard(actor: Actor) {
     const now = new Date();
     const settings = this.context.settings(actor);
@@ -100,7 +132,15 @@ export class InsightsService {
       z.object({ days: z.coerce.number().int().min(1).max(3650).default(30) }),
       query,
     );
-    const cutoff = new Date(Date.now() - input.days * 86400000).toISOString();
+    const timezone = this.context.settings(actor).timezone;
+    const today = localDate(new Date(), timezone);
+    const firstDay = new Date(`${today}T12:00:00Z`);
+    firstDay.setUTCDate(firstDay.getUTCDate() - (input.days - 1));
+    const firstDate = firstDay.toISOString().slice(0, 10);
+    const inPeriod = (value: string) => {
+      const date = localDate(value, timezone);
+      return date >= firstDate && date <= today;
+    };
     const appointments = this.context.repository.list<Appointment>(actor.tenantId, 'appointments');
     const orders = this.context.repository.list<Order>(actor.tenantId, 'orders');
     const entries = [
@@ -132,7 +172,7 @@ export class InsightsService {
           kind: 'product',
         })),
     ]
-      .filter((e) => e.date >= cutoff)
+      .filter((e) => inPeriod(e.date))
       .sort((a, b) => b.date.localeCompare(a.date));
     const projection = appointments
       .filter((a) => a.status === 'confirmed' && new Date(a.startsAt) > new Date())
@@ -144,8 +184,56 @@ export class InsightsService {
         amountCents: a.priceCents,
         paymentStatus: a.paymentStatus,
       }));
+    // Paid order totals already include discounts. Their appointments must not count twice.
+    const paidOrderIds = new Set(
+      orders.filter((order) => order.paymentStatus === 'paid').map((order) => order.id),
+    );
+    const payments = [
+      ...appointments
+        .filter((a) => a.paymentStatus === 'paid' && (!a.orderId || !paidOrderIds.has(a.orderId)))
+        .map((a) => ({
+          id: a.id,
+          name: a.itemName,
+          customerName: a.customerName,
+          amountCents: a.priceCents,
+          date: a.paidAt,
+          paymentStatus: 'paid',
+          kind: 'service',
+        })),
+      ...orders
+        .filter((o) => o.paymentStatus === 'paid')
+        .map((o) => ({
+          id: o.id,
+          name: o.items.map((i) => i.name).join(', '),
+          customerName: o.customerName,
+          amountCents: o.totalCents,
+          date: o.paidAt,
+          paymentStatus: 'paid',
+          kind: 'order',
+        })),
+    ].filter((entry) => entry.amountCents > 0);
+    const cashEntries = payments
+      .filter((entry) => entry.date && inPeriod(entry.date))
+      .map((entry) => ({ ...entry, date: entry.date! }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const expenses = this.context.repository
+      .list<Expense>(actor.tenantId, 'expenses')
+      .filter((expense) => expense.paidOn >= firstDate && expense.paidOn <= today)
+      .sort((a, b) => b.paidOn.localeCompare(a.paidOn) || b.createdAt.localeCompare(a.createdAt));
+    const cashReceivedCents = cashEntries.reduce((sum, entry) => sum + entry.amountCents, 0);
+    const expenseCents = expenses.reduce((sum, expense) => sum + expense.amountCents, 0);
     return {
       days: input.days,
+      cashReceivedCents,
+      expenseCents,
+      balanceCents: cashReceivedCents - expenseCents,
+      undatedReceivedCents: payments
+        .filter((entry) => !entry.date)
+        .reduce((sum, entry) => sum + entry.amountCents, 0),
+      cashEntries,
+      expenses,
+      periodStart: firstDate,
+      periodEnd: today,
       earnedCents: entries.reduce((s, e) => s + e.amountCents, 0),
       receivedCents: entries
         .filter((e) => e.paymentStatus === 'paid')
