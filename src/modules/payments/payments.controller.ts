@@ -15,6 +15,15 @@ export class PaymentsController {
   @Post('orders/:id') checkout(@Req() request: AuthRequest, @Param('id') id: string) {
     return this.service.checkout(request.actor, id);
   }
+  @Post('orders/:id/bricks') prepareBricks(@Req() request: AuthRequest, @Param('id') id: string) {
+    return this.service.bricks.prepare(request.actor, id);
+  }
+  @Post('orders/:id/bricks/pay') payBricks(@Req() request: AuthRequest, @Param('id') id: string, @Body() body: unknown) {
+    return this.service.bricks.pay(request.actor, id, body);
+  }
+  @Get('orders/:id/bricks/status') bricksStatus(@Req() request: AuthRequest, @Param('id') id: string) {
+    return this.service.bricks.status(request.actor, id);
+  }
   @Post('subscribe') subscribe(@Req() request: AuthRequest) {
     return this.service.subscribe(request.actor);
   }
