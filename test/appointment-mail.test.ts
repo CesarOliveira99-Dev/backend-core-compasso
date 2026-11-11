@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { Context } from '../dist/core/application/context.js';
 import { DocumentRepository } from '../dist/core/infrastructure/document.repository.js';
 import { queueAppointmentMail } from '../dist/modules/notifications/application/appointment-mail.js';
-import { AppointmentMailWorker, ResendAppointmentMail } from '../dist/modules/notifications/application/appointment-mail-worker.js';
+import { AppointmentMailWorker, ResendAppointmentMail, MailProviderRejected } from '../dist/modules/notifications/application/appointment-mail-worker.js';
+import { emailQuota } from '../dist/core/application/email-quota.js';
 import { ReminderWorker } from '../dist/modules/notifications/application/reminder-worker.js';
 import { TriageService } from '../dist/modules/triage/application/triage-service.js';
 import { AppointmentsService } from '../dist/modules/appointments/application/appointments-service.js';
@@ -148,4 +149,24 @@ test('transport sends stable provider idempotency key and handles rejection', as
     return new Response('', { status: 429 });
   }) as typeof fetch;
   await assert.rejects(() => new ResendAppointmentMail().send(f.jobs()[0]), /429/);
+});
+
+test('full quota defers mail without consuming retries or cancelling the appointment', async t => {
+  const f = fixture(t); f.queue();
+  f.repo.put('tenant', 'billing', 'subscription', { planId: 'essencial', paidThrough: f.now + 86400000 });
+  const quota = emailQuota(f.repo, 'tenant', f.now);
+  f.repo.put('tenant', 'email_usage', quota.day, { count: 100 });
+  await f.worker.run(f.now, { send: async () => assert.fail('quota should prevent provider call') });
+  assert.equal(f.jobs()[0].attempts, 0); assert.equal(f.jobs()[0].state, 'pending');
+  assert.equal(f.repo.get<any>('tenant', 'appointments', 'booking').status, 'confirmed');
+});
+
+test('definite first rejection releases quota, but rejection after an uncertain delivery preserves the reservation', async t => {
+  const f = fixture(t); f.queue();
+  await f.worker.run(f.now, { send: async () => { throw new MailProviderRejected('429'); } });
+  assert.equal(emailQuota(f.repo, 'tenant', f.now).monthly.used, 0);
+  await f.worker.run(f.now + 60000, { send: async () => { throw new Error('unknown delivery'); } });
+  assert.equal(emailQuota(f.repo, 'tenant', f.now).monthly.used, 1);
+  await f.worker.run(f.now + 180000, { send: async () => { throw new MailProviderRejected('409'); } });
+  assert.equal(emailQuota(f.repo, 'tenant', f.now).monthly.used, 1);
 });

@@ -5,7 +5,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { Context } from '../dist/core/application/context.js';
 import { DocumentRepository } from '../dist/core/infrastructure/document.repository.js';
 import { encrypt, decrypt, validSignature } from '../dist/modules/payments/payment-security.js';
-import { PaymentsService, billingPrice } from '../dist/modules/payments/payments.service.js';
+import { PaymentsService } from '../dist/modules/payments/payments.service.js';
 
 process.env.DATABASE_PATH = ':memory:';
 process.env.PAYMENTS_ENCRYPTION_KEY = randomBytes(32).toString('base64');
@@ -50,14 +50,11 @@ test('payment secrets are encrypted and tampering fails; webhook requires valid 
     false,
   );
 });
-test('billing stays disabled without an explicit positive integer price', () => {
-  for (const value of ['', '0', '-1', 'NaN', '49.90']) {
-    process.env.COMPASSO_MONTHLY_PRICE_CENTS = value;
-    assert.equal(billingPrice(), 0);
-  }
-  process.env.COMPASSO_MONTHLY_PRICE_CENTS = '4990';
-  assert.equal(billingPrice(), 4990);
-  delete process.env.COMPASSO_MONTHLY_PRICE_CENTS;
+test('billing stays disabled until explicitly enabled; catalog is always visible to the owner', () => {
+  delete process.env.COMPASSO_SUBSCRIPTIONS_ENABLED;
+  const status = new PaymentsService(new Context(new DocumentRepository())).status(actor);
+  assert.equal(status.billingEnabled, false);
+  assert.deepEqual(status.plans.map(plan => plan.priceCents), [5990, 7990, 9990]);
 });
 test('verified API data settles only the correct merchant/order/amount, deduplicates and handles refunds', async (t) => {
   const repo = new DocumentRepository();
@@ -130,7 +127,7 @@ test('customer cannot connect accounts or subscribe, nor pay another customers o
   const customer = { ...actor, role: 'customer' as const, id: 'buyer' };
   repo.put(actor.tenantId, 'orders', 'private', { customerId: 'other' });
   await assert.rejects(() => service.connect(customer));
-  await assert.rejects(() => service.subscribe(customer));
+  await assert.rejects(() => service.subscribe(customer, { planId: 'essencial' }));
   await assert.rejects(() => service.checkout(customer, 'private'));
 });
 test('OAuth uses random state and PKCE; state cannot be replayed', async (t) => {

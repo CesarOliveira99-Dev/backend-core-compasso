@@ -1,3 +1,4 @@
+import { requireEmployeeSeat } from '../../core/application/store-plans.js';
 import { validCalendarDate } from '../appointments/domain/availability.js';
 import {
   BadRequestException,
@@ -106,6 +107,10 @@ export class ProfessionalsService {
         throw new BadRequestException('Selecione apenas serviços desta loja.');
     }
     const previous = this.context.repository.get<Professional>(actor.tenantId,'professionals',recordId);
+    const hasEmployeeSeat = this.context.repository.list<Actor>(actor.tenantId, 'customers')
+      .some(user => user.role === 'employee' && user.active !== false && user.professionalId === recordId);
+    if (recordId !== 'principal' && input.active && !previous?.active && !hasEmployeeSeat)
+      requireEmployeeSeat(this.context.repository, actor.tenantId);
     return this.context.repository.put(actor.tenantId, 'professionals', recordId, {
       ...input,
       ...(previous?.userId ? {userId:previous.userId} : {}),

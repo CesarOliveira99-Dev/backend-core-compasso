@@ -1,3 +1,4 @@
+import { startStoreTrial } from '../../../core/application/store-plans.js';
 import { AccountRecovery } from './account-recovery.js';
 import { CustomerAccounts } from './customer-accounts.js';
 import { Memberships, tokenHash } from './memberships.js';
@@ -41,6 +42,8 @@ export class IdentityService {
     const input = parse(
       z.object({
         q: z.string().max(100).default(''),
+        city: z.string().trim().max(100).default(''),
+        state: z.string().regex(/^[A-Z]{2}$/).optional(),
         page: z.coerce.number().int().min(0).max(10000).default(0),
       }),
       query,
@@ -51,6 +54,8 @@ export class IdentityService {
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase();
     const items = this.stores()
+      .filter(store => (!input.city || normalize(store.city || '') === normalize(input.city)) &&
+        (!input.state || store.state === input.state))
       .filter((store) =>
         normalize(`${store.businessName} ${store.city} ${store.state}`).includes(
           normalize(input.q),
@@ -512,6 +517,7 @@ export class IdentityService {
         workDays: [0, 1, 2, 3, 4, 5, 6],
       };
       this.context.repository.put(tenantId, 'settings', 'business', settings);
+      startStoreTrial(this.context.repository, customer);
     }
     return this.session(customer);
   }

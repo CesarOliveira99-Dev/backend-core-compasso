@@ -1,3 +1,4 @@
+import { requireEmployeeSeat } from '../../../core/application/store-plans.js';
 import {
   BadRequestException,
   ConflictException,
@@ -77,6 +78,7 @@ export class Memberships {
       throw new ConflictException(
         'Entre na conta existente nesta loja antes de aceitar o convite.',
       );
+    requireEmployeeSeat(this.repo, invite.tenantId);
     const member: Customer = {
       ...person,
       id: members[0]?.id || id(),
@@ -196,6 +198,8 @@ export class Memberships {
     return this.repo.transaction(() => {
       const employee = this.context.require<Customer>(actor, 'customers', userId);
       if (employee.role !== 'employee') throw new ForbiddenException();
+      const hasActiveProfessional = employee.professionalId && this.repo.get<Professional>(actor.tenantId, 'professionals', employee.professionalId)?.active;
+      if (active && employee.active === false && !hasActiveProfessional) requireEmployeeSeat(this.repo, actor.tenantId);
       this.repo.put(actor.tenantId, 'customers', userId, { ...employee, active });
       const professional =
         employee.professionalId &&

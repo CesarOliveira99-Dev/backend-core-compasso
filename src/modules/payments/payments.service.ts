@@ -1,3 +1,4 @@
+import { SubscriptionBilling } from './subscription-billing.js';
 import { BricksCheckout } from './bricks-checkout.js';
 import { payableOrder, reservePaymentRoute, settlePayment } from './order-payment.js';
 import {RecommendationAddon} from './recommendation-addon.js';
@@ -8,7 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
-import { Context, timestamp } from '../../core/application/context.js';
+import { Context } from '../../core/application/context.js';
 import type { Actor } from '../../core/domain/models.js';
 import { decrypt, encrypt, validSignature } from './payment-security.js';
 
@@ -37,15 +38,13 @@ function httpsUrl(name: string) {
     throw new ServiceUnavailableException('Pagamentos exigem URLs públicas HTTPS.');
   return url.toString().replace(/\/$/, '');
 }
-export function billingPrice(): number {
-  const price = Number(process.env.COMPASSO_MONTHLY_PRICE_CENTS || 0);
-  return Number.isSafeInteger(price) && price > 0 ? price : 0;
-}
 @Injectable()
 export class PaymentsService {
+  readonly billing: SubscriptionBilling;
   readonly addon: RecommendationAddon;
   readonly bricks: BricksCheckout;
   constructor(private readonly context: Context) {
+    this.billing = new SubscriptionBilling(context, this.call.bind(this));
     this.addon = new RecommendationAddon(context, this.call.bind(this));
     this.bricks = new BricksCheckout(context, async tenantId => {
       const accessToken = await this.access(tenantId);
@@ -72,9 +71,7 @@ export class PaymentsService {
         process.env.APP_URL,
       ),
       connected: Boolean(this.connection(actor.tenantId)),
-      monthlyPriceCents: billingPrice(),
-      billingEnabled: Boolean(billingPrice() && process.env.MP_PLATFORM_ACCESS_TOKEN),
-      subscription: this.repo.get(actor.tenantId, 'billing', 'subscription') || null,
+      ...this.billing.status(actor),
     };
   }
   async connect(actor: Actor) {
@@ -194,59 +191,8 @@ export class PaymentsService {
     this.repo.put(actor.tenantId, 'checkout_links', orderId, link);
     return link;
   }
-  async subscribe(actor: Actor) {
-    this.context.admin(actor);
-    const price = billingPrice();
-    if (!price) throw new BadRequestException('O plano do Compasso ainda não foi disponibilizado.');
-    const previous = this.repo.get<{ id: string; url: string; status: string }>(
-      actor.tenantId,
-      'billing',
-      'subscription',
-    );
-    if (previous && previous.status !== 'cancelled') return previous;
-    const result = await this.call<{ id: string; init_point: string; status: string }>(
-      '/preapproval',
-      configured('MP_PLATFORM_ACCESS_TOKEN'),
-      {
-        reason: 'Assinatura mensal Compasso',
-        external_reference: actor.tenantId,
-        payer_email: actor.email,
-        auto_recurring: {
-          frequency: 1,
-          frequency_type: 'months',
-          transaction_amount: price / 100,
-          currency_id: 'BRL',
-        },
-        back_url: httpsUrl('APP_URL'),
-        status: 'pending',
-      },
-      `subscription-${actor.tenantId}`,
-    );
-    return this.repo.put(actor.tenantId, 'billing', 'subscription', {
-      id: result.id,
-      url: result.init_point,
-      status: result.status,
-      priceCents: price,
-    });
-  }
-  async refreshSubscription(actor: Actor) {
-    this.context.admin(actor);
-    const subscription = this.context.require<{ id: string; url: string; priceCents: number }>(
-      actor,
-      'billing',
-      'subscription',
-    );
-    const result = await this.call<{ status: string; external_reference: string }>(
-      '/preapproval/' + encodeURIComponent(subscription.id),
-      configured('MP_PLATFORM_ACCESS_TOKEN'),
-    );
-    if (result.external_reference !== actor.tenantId) throw new ForbiddenException();
-    return this.repo.put(actor.tenantId, 'billing', 'subscription', {
-      ...subscription,
-      status: result.status,
-      checkedAt: timestamp(),
-    });
-  }
+  subscribe(actor: Actor, body: unknown) { return this.billing.subscribe(actor, body); }
+  refreshSubscription(actor: Actor) { return this.billing.refresh(actor); }
   async webhook(
     dataId: string,
     requestId: string,
@@ -255,8 +201,15 @@ export class PaymentsService {
   ) {
     if (!validSignature(dataId, requestId, signature, configured('MP_WEBHOOK_SECRET')))
       throw new ForbiddenException('Assinatura inválida.');
+    if (body.type === 'subscription_preapproval') { await this.billing.preapproval(dataId); return { received: true }; }
+    if (body.type === 'subscription_authorized_payment') { await this.billing.invoice(dataId); return { received: true }; }
     if (body.type !== 'payment') return { received: true };
-    if(process.env.MP_PLATFORM_USER_ID && String(body.user_id)===process.env.MP_PLATFORM_USER_ID && process.env.MP_PLATFORM_ACCESS_TOKEN) return this.addon.webhook(dataId);
+    if (process.env.MP_PLATFORM_USER_ID && String(body.user_id) === process.env.MP_PLATFORM_USER_ID && process.env.MP_PLATFORM_ACCESS_TOKEN) {
+      if (this.billing.enabled() && await this.billing.payment(dataId)) return { received: true };
+      const payment = await this.call<{ external_reference?: string }>(
+        '/v1/payments/' + encodeURIComponent(dataId), process.env.MP_PLATFORM_ACCESS_TOKEN);
+      if (payment.external_reference?.startsWith('compasso-addon:')) return this.addon.webhook(dataId);
+    }
     const merchant = this.repo.get<{ tenantId: string }>(
       platform,
       'merchants',
