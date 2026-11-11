@@ -1,3 +1,5 @@
+import { BricksCheckout } from './bricks-checkout.js';
+import { payableOrder, reservePaymentRoute, settlePayment } from './order-payment.js';
 import {RecommendationAddon} from './recommendation-addon.js';
 import {
   BadRequestException,
@@ -7,11 +9,12 @@ import {
 } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { Context, timestamp } from '../../core/application/context.js';
-import type { Actor, Appointment, Order, Triage } from '../../core/domain/models.js';
+import type { Actor } from '../../core/domain/models.js';
 import { decrypt, encrypt, validSignature } from './payment-security.js';
 
 interface Tokens {
   access_token: string;
+  public_key?: string;
   refresh_token: string;
   expires_in: number;
   user_id: number;
@@ -41,7 +44,16 @@ export function billingPrice(): number {
 @Injectable()
 export class PaymentsService {
   readonly addon: RecommendationAddon;
-  constructor(private readonly context: Context) { this.addon=new RecommendationAddon(context,this.call.bind(this)); }
+  readonly bricks: BricksCheckout;
+  constructor(private readonly context: Context) {
+    this.addon = new RecommendationAddon(context, this.call.bind(this));
+    this.bricks = new BricksCheckout(context, async tenantId => {
+      const accessToken = await this.access(tenantId);
+      const connection = this.connection(tenantId)!;
+      const tokens = decrypt<Tokens>(connection.encrypted);
+      return { accessToken, publicKey: tokens.public_key || process.env.MP_PUBLIC_KEY || '', sellerId: connection.userId };
+    });
+  }
   private get repo() {
     return this.context.repository;
   }
@@ -132,12 +144,14 @@ export class PaymentsService {
       throw new BadRequestException('O comerciante ainda não conectou o Mercado Pago.');
     let tokens = decrypt<Tokens>(connection.encrypted);
     if (connection.expiresAt < Date.now() + 60_000) {
+      const previousPublicKey = tokens.public_key;
       tokens = await this.call<Tokens>('/oauth/token', undefined, {
         client_id: configured('MP_CLIENT_ID'),
         client_secret: configured('MP_CLIENT_SECRET'),
         grant_type: 'refresh_token',
         refresh_token: tokens.refresh_token,
       });
+      tokens.public_key ||= previousPublicKey;
       this.repo.put(tenantId, 'payment_connections', 'mercadopago', {
         userId: connection.userId,
         encrypted: encrypt(tokens),
@@ -147,29 +161,10 @@ export class PaymentsService {
     return tokens.access_token;
   }
   async checkout(actor: Actor, orderId: string) {
-    const order = this.context.require<Order>(actor, 'orders', orderId);
-    this.context.owned(actor, order.customerId);
-    if (
-      order.paymentMethod !== 'online' ||
-      order.paymentStatus === 'paid' ||
-      order.status === 'cancelled' ||
-      order.totalCents <= 0
-    )
-      throw new BadRequestException('Este pedido não está disponível para pagamento online.');
-    if (
-      this.repo
-        .list<Triage>(actor.tenantId, 'triage')
-        .some((t) => t.orderId === orderId && t.status !== 'approved')
-    )
-      throw new BadRequestException('Aguarde a aprovação da triagem antes de pagar.');
-    if (
-      this.repo
-        .list<Appointment>(actor.tenantId, 'appointments')
-        .some((a) => a.orderId === orderId && (a.status === 'pending' || a.status === 'cancelled'))
-    )
-      throw new BadRequestException(
-        'Resolva a triagem ou o cancelamento dos atendimentos antes de pagar.',
-      );
+    const order = payableOrder(this.context, actor, orderId);
+    reservePaymentRoute(this.context, actor.tenantId, orderId, 'pro');
+    if (this.repo.get(actor.tenantId, 'brick_attempts', orderId))
+      throw new BadRequestException('Continue o pagamento na janela do pedido.');
     const previous = this.repo.get<{ url: string }>(actor.tenantId, 'checkout_links', orderId);
     if (previous) return previous;
     const token = await this.access(actor.tenantId);
@@ -277,49 +272,7 @@ export class PaymentsService {
       currency_id: string;
       live_mode: boolean;
     }>(`/v1/payments/${encodeURIComponent(dataId)}`, await this.access(merchant.tenantId));
-    const connection = this.connection(merchant.tenantId)!;
-    if (String(payment.collector_id) !== connection.userId || payment.currency_id !== 'BRL')
-      throw new ForbiddenException();
-    if (payment.live_mode !== (process.env.MP_SANDBOX !== 'true'))
-      throw new BadRequestException('Ambiente de pagamento incompatível.');
-    const prefix = `${merchant.tenantId}:`;
-    if (!payment.external_reference?.startsWith(prefix))
-      throw new BadRequestException('Pedido inválido.');
-    const orderId = payment.external_reference.slice(prefix.length);
-    this.repo.transaction(() => {
-      const order = this.repo.get<Order>(merchant.tenantId, 'orders', orderId);
-      if (
-        !order ||
-        order.paymentMethod !== 'online' ||
-        Math.round(payment.transaction_amount * 100) !== order.totalCents
-      )
-        throw new BadRequestException('Valor ou pedido incompatível.');
-      const other = this.repo.get<{ paymentId: string }>(merchant.tenantId, 'settlements', orderId);
-      if (other && other.paymentId !== String(payment.id))
-        throw new BadRequestException('Pedido já possui outro pagamento.');
-      if (payment.status === 'approved' && order.status !== 'cancelled') {
-        order.paymentStatus = 'paid';
-        order.paidAt ??= timestamp();
-        this.repo.put(merchant.tenantId, 'settlements', orderId, { paymentId: String(payment.id) });
-      } else if (['refunded', 'charged_back'].includes(payment.status) && other) {
-        order.paymentStatus = 'pending';
-        order.paidAt = undefined;
-      }
-      this.repo.put(merchant.tenantId, 'orders', orderId, order);
-      for (const appointment of this.repo
-        .list<Appointment>(merchant.tenantId, 'appointments')
-        .filter((a) => a.orderId === orderId && a.status !== 'cancelled'))
-        this.repo.put(merchant.tenantId, 'appointments', appointment.id, {
-          ...appointment,
-          paymentStatus: order.paymentStatus,
-          paidAt: order.paidAt,
-        });
-      this.repo.put(merchant.tenantId, 'payment_events', String(payment.id), {
-        status: payment.status,
-        orderId,
-        checkedAt: timestamp(),
-      });
-    });
+    settlePayment(this.context, merchant.tenantId, this.connection(merchant.tenantId)!.userId, payment);
     return { received: true };
   }
   private async call<T>(
