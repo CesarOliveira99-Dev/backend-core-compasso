@@ -1,3 +1,4 @@
+import { requireStoreService } from '../../../core/application/store-plans.js';
 import { freeSlots, scheduleWindow, slotIssue, validCalendarDate } from '../domain/availability.js';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { z } from 'zod';
@@ -159,6 +160,7 @@ export class AppointmentsService {
       return this.context.require<Appointment>(actor, 'appointments', previous.appointmentId);
     }
 
+    requireStoreService(this.context.repository, actor.tenantId);
     const item = this.context.require<CatalogItem>(actor, 'catalog', input.itemId);
     if (!item.active || item.kind !== 'service')
       throw new BadRequestException('Serviço indisponível.');

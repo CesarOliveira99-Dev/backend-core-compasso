@@ -1,3 +1,4 @@
+import { reserveEmail, finishEmail, beginEmailAttempt, notifyEmailQuota } from '../../../core/application/email-quota.js';
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Context } from '../../../core/application/context.js';
 import type { Appointment, Customer } from '../../../core/domain/models.js';
@@ -6,6 +7,8 @@ import { appointmentMailEnabled, type AppointmentMailJob } from './appointment-m
 export interface AppointmentMailSender {
   send(job: AppointmentMailJob): Promise<void>;
 }
+
+export class MailProviderRejected extends Error {}
 
 export class ResendAppointmentMail implements AppointmentMailSender {
   async send(job: AppointmentMailJob) {
@@ -17,7 +20,10 @@ export class ResendAppointmentMail implements AppointmentMailSender {
       },
       body: JSON.stringify({ from: job.from, to: [job.email], subject: job.subject, text: job.text }),
     });
-    if (!response.ok) throw new Error(`Mail provider status ${response.status}`);
+    if (!response.ok) {
+      if (response.status >= 400 && response.status < 500) throw new MailProviderRejected(`Mail provider rejected: ${response.status}`);
+      throw new Error('Mail provider unavailable');
+    }
   }
 }
 
@@ -53,18 +59,29 @@ export class AppointmentMailWorker implements OnModuleInit, OnModuleDestroy {
             repository.put(store.tenantId, 'appointment_mail', job.id, { ...job, state: 'skipped' });
             continue;
           }
-          if (processed++ >= 10) return;
+          if (processed >= 10) return;
+          if (!reserveEmail(repository, store.tenantId, job.id, now)) {
+            notifyEmailQuota(this.context, store.tenantId, now);
+            repository.put(store.tenantId, 'appointment_mail', job.id, { ...job, nextAttemptAt: now + 60000 });
+            continue;
+          }
+          processed++;
           const attempt = { ...job, attempts: job.attempts + 1, firstAttemptAt: job.firstAttemptAt ?? now };
           repository.put(store.tenantId, 'appointment_mail', job.id, attempt);
           try {
+            beginEmailAttempt(repository, store.tenantId, job.id);
             await sender.send(attempt);
             repository.put(store.tenantId, 'appointment_mail', job.id, { ...attempt, state: 'sent' });
-          } catch {
+            finishEmail(repository, store.tenantId, job.id, true);
+            notifyEmailQuota(this.context, store.tenantId, now);
+          } catch (error) {
+            if (error instanceof MailProviderRejected) finishEmail(repository, store.tenantId, job.id, false);
             repository.put(store.tenantId, 'appointment_mail', job.id, {
               ...attempt, state: attempt.attempts >= 6 ? 'failed' : 'pending',
               nextAttemptAt: now + Math.min(3600000, 60000 * 2 ** (attempt.attempts - 1)),
             });
             console.error('Appointment email deferred', job.id, attempt.attempts);
+            notifyEmailQuota(this.context, store.tenantId, now);
           }
           // Respect provider throughput while keeping booking requests independent.
           if (sender instanceof ResendAppointmentMail)

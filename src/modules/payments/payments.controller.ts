@@ -24,11 +24,14 @@ export class PaymentsController {
   @Get('orders/:id/bricks/status') bricksStatus(@Req() request: AuthRequest, @Param('id') id: string) {
     return this.service.bricks.status(request.actor, id);
   }
-  @Post('subscribe') subscribe(@Req() request: AuthRequest) {
-    return this.service.subscribe(request.actor);
+  @Post('subscribe') subscribe(@Req() request: AuthRequest, @Body() body: unknown) {
+    return this.service.subscribe(request.actor, body);
   }
   @Post('subscription/refresh') refresh(@Req() request: AuthRequest) {
     return this.service.refreshSubscription(request.actor);
+  }
+  @Post('subscription/extras') extras(@Req() request: AuthRequest, @Body() body: unknown) {
+    return this.service.billing.changeExtras(request.actor, body);
   }
   @Public() @Get('callback') async callback(
     @Query('state') state = '',

@@ -1,3 +1,4 @@
+import { requireStoreService } from '../../../core/application/store-plans.js';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { Context, id, parse, timestamp } from '../../../core/application/context.js';
@@ -35,6 +36,7 @@ export class CheckoutService {
           throw new BadRequestException('Chave já utilizada em outra compra.');
         return this.context.require<Order>(actor, 'orders', existing.orderId);
       }
+      requireStoreService(this.context.repository, actor.tenantId);
       const { order, coupon, lines, hasProduct } = this.prepare(actor, input);
       if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== order.totalCents)
         throw new BadRequestException(

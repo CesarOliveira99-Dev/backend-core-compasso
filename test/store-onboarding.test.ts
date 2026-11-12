@@ -109,9 +109,24 @@ test('Google administrator onboarding accepts location without a store code', as
     address,
   });
   assert.equal(repo.get<any>(account.user.tenantId, 'settings', 'business').address.city, 'Assis');
+  const trial = repo.get<any>(account.user.tenantId, 'billing', 'trial');
+  assert.equal(trial.endsAt - trial.startedAt, 14 * 86400000);
   const later = await identity.google({
     ...identity.googleChallenge(),
     credential: 'credential-at-least-20-characters',
   });
   assert.equal(later.user.id, account.user.id);
+});
+
+test('discovery filters by city and state while allowing unrestricted manual searches', () => {
+  process.env.DATABASE_PATH=':memory:';
+  const repo=new DocumentRepository(), identity=new IdentityService(new Context(repo),new GoogleIdentity());
+  for(const [slug,city,state] of [['one','São Paulo','SP'],['two','Assis','SP'],['three','Assis','RS']]) {
+    repo.put('system','stores',slug,{tenantId:slug});
+    repo.put(slug,'settings','business',{slug,businessName:`Loja ${slug}`,address:{city,state}});
+  }
+  assert.deepEqual(identity.discovery({city:'sao paulo',state:'SP'}).items.map(s=>s.slug),['one']);
+  assert.deepEqual(identity.discovery({city:'Assis',state:'SP'}).items.map(s=>s.slug),['two']);
+  assert.equal(identity.discovery({q:'Assis'}).items.length,2);
+  assert.equal(identity.discovery({}).items.length,3);
 });
