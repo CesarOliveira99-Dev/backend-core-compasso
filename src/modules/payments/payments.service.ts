@@ -1,4 +1,5 @@
 import { SubscriptionBilling } from './subscription-billing.js';
+import { PaymentProviderRejected } from './payment-provider-error.js';
 import { BricksCheckout } from './bricks-checkout.js';
 import { payableOrder, reservePaymentRoute, settlePayment } from './order-payment.js';
 import {RecommendationAddon} from './recommendation-addon.js';
@@ -233,11 +234,12 @@ export class PaymentsService {
     token?: string,
     body?: unknown,
     idempotency?: string,
+    method?: 'PUT',
   ): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`https://api.mercadopago.com${path}`, {
-        method: body ? 'POST' : 'GET',
+        method: method || (body ? 'POST' : 'GET'),
         signal: AbortSignal.timeout(15_000),
         headers: {
           'Content-Type': 'application/json',
@@ -249,6 +251,8 @@ export class PaymentsService {
     } catch {
       throw new ServiceUnavailableException('Mercado Pago indisponível. Tente novamente.');
     }
+    if (response.status >= 400 && response.status < 500 && method === 'PUT')
+      throw new PaymentProviderRejected('O Mercado Pago recusou a alteração. Nenhuma vaga adicional foi liberada.');
     if (!response.ok)
       throw new ServiceUnavailableException(
         'Não foi possível concluir no Mercado Pago. Confira a configuração e tente novamente.',

@@ -6,14 +6,20 @@ import type { Actor } from '../domain/models.js';
 export const STORE_PLANS = [
   { id: 'essencial', name: 'Essencial', priceCents: 5990, employees: 1, monthlyEmails: 1000, dailyEmails: 100 },
   { id: 'profissional', name: 'Profissional', priceCents: 7990, employees: 5, monthlyEmails: 2500, dailyEmails: 200 },
-  { id: 'equipe', name: 'Equipe', priceCents: 9990, employees: 10, monthlyEmails: 5000, dailyEmails: 400 },
+  { id: 'equipe', name: 'Equipe', priceCents: 9990, employees: 10, monthlyEmails: 5000, dailyEmails: 400, extraEmployeePriceCents: 2500 },
 ] as const;
 export type PlanId = typeof STORE_PLANS[number]['id'];
 export const findPlan = (id: string) => STORE_PLANS.find(plan => plan.id === id);
+export function planPrice(planId: PlanId, extraEmployees = 0) {
+  if (!Number.isSafeInteger(extraEmployees) || extraEmployees < 0 || extraEmployees > 90 || (planId !== 'equipe' && extraEmployees !== 0))
+    throw new ForbiddenException('Colaboradores extras estão disponíveis somente no plano Equipe, até 100 colaboradores no total.');
+  return findPlan(planId)!.priceCents + extraEmployees * STORE_PLANS[2].extraEmployeePriceCents;
+}
 export interface Trial { startedAt: number; endsAt: number }
 export interface StoreSubscription {
   id: string; planId: PlanId; priceCents: number; url: string; status: string;
   externalReference: string; paidThrough?: number; checkedAt?: string;
+  extraEmployees?: number;
 }
 
 /** Called inside the account creation transaction. Customers never receive a trial or billing record. */
@@ -31,7 +37,7 @@ export function storeEntitlement(repo: Repository, tenantId: string, now = Date.
   const subscription = repo.get<StoreSubscription>(tenantId, 'billing', 'subscription');
   const plan = subscription?.planId && findPlan(subscription.planId);
   if (plan && (subscription.paidThrough || 0) > now)
-    return { mode: 'active' as const, plan, expiresAt: subscription.paidThrough!, trialEndsAt: trial?.endsAt };
+    return { mode: 'active' as const, plan: { ...plan, employees: plan.employees + (subscription.extraEmployees || 0), priceCents: subscription.priceCents }, expiresAt: subscription.paidThrough!, trialEndsAt: trial?.endsAt };
   if (trial && trial.endsAt > now)
     return { mode: 'trial' as const, plan: STORE_PLANS[2], expiresAt: trial.endsAt, trialEndsAt: trial.endsAt };
   if (!trial && !subscription?.planId)
@@ -57,7 +63,12 @@ export function employeeSeats(repo: Repository, tenantId: string) {
 
 export function requireEmployeeSeat(repo: Repository, tenantId: string) {
   requireStoreService(repo, tenantId);
+  if (repo.get(tenantId, 'billing', 'extras_change'))
+    throw new ForbiddenException('Aguarde a confirmação da alteração de colaboradores extras antes de incluir ou reativar um colaborador.');
   const entitlement = storeEntitlement(repo, tenantId);
-  if (entitlement.plan && employeeSeats(repo, tenantId) >= entitlement.plan.employees)
+  if (entitlement.plan && employeeSeats(repo, tenantId) >= entitlement.plan.employees) {
+    if (entitlement.mode === 'active' && entitlement.plan.id === 'equipe')
+      throw new ForbiddenException('Limite de colaboradores atingido. O dono da loja pode confirmar mais uma vaga por R$25,00 mensais na área de equipe ou nos planos antes de incluir este colaborador.');
     throw new ForbiddenException(`Seu plano permite até ${entitlement.plan.employees} funcionário(s) ativo(s). Desative um acesso ou escolha um plano maior.`);
+  }
 }

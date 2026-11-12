@@ -4,13 +4,27 @@
 | --- | ---: | ---: | ---: |
 | Essencial — R$ 59,90 | 1 | 1.000 | 100 |
 | Profissional — R$ 79,90 | 5 | 2.500 | 200 |
-| Equipe — R$ 99,90 | 10 | 5.000 | 400 |
+| Equipe — R$ 99,90 | 10 incluídos + R$25,00 por extra/mês | 5.000 | 400 |
 
 O proprietário/principal não ocupa vaga. Um profissional adicional também ocupa vaga, mesmo sem acesso de funcionário. A pessoa vinculada ao profissional é contada uma vez. Desativação libera a vaga, reativação confere o limite novamente. Contratar um plano menor exige desativar excedentes; nenhum cadastro é apagado.
 
 Novos donos recebem 14 × 24 horas desde a criação da loja, tanto por senha quanto Google, com os recursos do Equipe. Sem cartão obrigatório. Sem autorização explícita de uma assinatura, o término do teste não gera cobrança. O primeiro teste é registrado por hash do e-mail normalizado, impedindo reinício por recadastro com o mesmo e-mail. Isso não constitui verificação antifraude de identidade civil. Clientes não recebem assinatura nem mensalidade; continuam pagando apenas os serviços/produtos contratados.
 
 Ao expirar, novos pedidos, agendamentos e adições de funcionários são bloqueados no servidor. Consultas, dados existentes, gestão de cadastros e processamento de pedidos já criados continuam disponíveis. Lojas preexistentes sem novo plano ou teste mantêm o piloto; não há migração ou cobrança retroativa. Assinaturas legadas precisam de conferência antes de migração ao novo catálogo.
+
+## Colaboradores extras no Equipe
+
+O valor mensal é `9990 + 2500 × extras contratados`, em centavos: 11 vagas custam R$124,90/mês; 12 custam R$149,90/mês. Essencial e Profissional não aceitam extras. O autosserviço permite até 90 extras (100 vagas totais). As franquias de e-mail não aumentam com colaboradores extras.
+
+Na contratação inicial, a quantidade escolhida já compõe o valor enviado ao Mercado Pago e o resumo confirmado pelo dono. O teste gratuito continua com até 10, sem extras pagos ou cobrança automática.
+
+Em uma assinatura Equipe autorizada e com período pago vigente, o dono pode adicionar uma vaga em Equipe ou Configurações. Antes de liberar o cadastro acima da capacidade atual, ele confirma o novo total mensal. `POST /payments/subscription/extras` aceita somente quantidade e valor esperado; valida permissão, plano, capacidade ocupada e preço canônico. Envia `PUT /preapproval/{id}` com o novo valor recorrente, sem criar outra assinatura ou uma cobrança avulsa. A mudança vale para as cobranças ainda não geradas; não há rateio nem ajuste retroativo nesta versão.
+
+As vagas extras são contratadas até redução explícita: desativar um colaborador libera a vaga para substituição, mas não remove a vaga contratada da recorrência. O dono pode reduzir as vagas extras desocupadas e confirmar o novo valor no mesmo painel. Não é permitido reduzir abaixo das vagas ocupadas. Isso evita alteração financeira iniciada por outra pessoa ao aceitar um convite compartilhado.
+
+A intenção de alteração é persistida antes do PUT. Falha incerta bloqueia novas inclusões/reativações e outra alteração, até conferência por GET/Atualizar situação; não há repetição automática de PUT. Recusa HTTP 4xx definitiva mantém preço/capacidade anteriores e remove apenas a intenção recusada. A quantidade só muda após conferir o retorno do provedor. Preços históricos confirmados são preservados para validar faturas antigas, renovação e reembolso após alterações de valor.
+
+Homologar também aumento, redução e momento de aplicação à fatura antes de ativar a cobrança real. Referência: [alterar valor da assinatura](https://www.mercadopago.com.br/developers/pt/docs/subscriptions/subscription-management).
 
 ## E-mails
 
