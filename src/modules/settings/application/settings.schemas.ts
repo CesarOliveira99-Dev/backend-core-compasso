@@ -1,3 +1,4 @@
+import { personNameSchema, phoneSchema } from '../../../core/application/person.schemas.js';
 import { z } from 'zod';
 import { weeklyHoursSchema } from './weekly-hours.schema.js';
 import { businessProfileFields } from './business-profile.schemas.js';
@@ -5,7 +6,7 @@ import { businessProfileFields } from './business-profile.schemas.js';
 export const settingsSchema = z
   .object({
     ...businessProfileFields,
-    name: z.string().trim().min(2).max(100),
+    name: personNameSchema,
     businessName: z.string().trim().min(2).max(100),
     timezone: z.literal('America/Sao_Paulo'),
     completionMode: z.enum(['manual', 'automatic']),

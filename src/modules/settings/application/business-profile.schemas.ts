@@ -1,3 +1,4 @@
+import { phoneSchema } from '../../../core/application/person.schemas.js';
 import { z } from 'zod';
 
 export const businessAddressSchema = z.object({
@@ -28,7 +29,7 @@ export const mediaAssetSchema = z.object({
 });
 
 export const businessProfileFields = {
-  phone: z.string().min(10).max(20).optional(),
+  phone: phoneSchema.optional(),
   address: businessAddressSchema.optional(),
 
   description: z.string().trim().max(2000).optional(),

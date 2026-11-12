@@ -1,3 +1,4 @@
+import { personNameSchema, phoneSchema } from '../../../core/application/person.schemas.js';
 import { startStoreTrial } from '../../../core/application/store-plans.js';
 import { AccountRecovery } from './account-recovery.js';
 import { CustomerAccounts } from './customer-accounts.js';
@@ -106,7 +107,7 @@ export class IdentityService {
         challenge: z.string().uuid(),
         mode: z.enum(['login', 'link']).default('login'),
         slug: z.string().min(2).max(60).optional(),
-        phone: z.string().min(10).max(20).optional(),
+        phone: phoneSchema.optional(),
         role: z.enum(['admin', 'customer']).optional(),
         businessName: z.string().max(100).optional(),
       }),
@@ -242,10 +243,11 @@ export class IdentityService {
     const input = parse(
       z.object({
         enrollmentToken: z.string().length(64),
+        name: personNameSchema.optional(),
         slug: z.string().min(2).max(60).optional(),
         address: businessAddressSchema.optional(),
         role: z.enum(['admin', 'customer']).optional(),
-        phone: z.string().min(10).max(20).optional(),
+        phone: phoneSchema.optional(),
         businessName: z.string().trim().min(2).max(100).optional(),
         password: z.string().min(8).max(128).optional(),
       }),
@@ -280,7 +282,7 @@ export class IdentityService {
           id: id(),
           tenantId: '',
           role: 'customer',
-          name: identity.name,
+          name: parse(personNameSchema, input.name ?? identity.name),
           email: identity.email,
           phone: input.phone,
           passwordHash: hashPassword(randomBytes(48).toString('hex')),
@@ -333,7 +335,7 @@ export class IdentityService {
           result = this.createAccount({
             role: 'customer',
             phone: input.phone,
-            name: identity.name,
+            name: parse(personNameSchema, input.name ?? identity.name),
             email: identity.email,
             password: randomBytes(48).toString('hex'),
           });
@@ -361,7 +363,7 @@ export class IdentityService {
           throw new BadRequestException('Informe o nome do negócio.');
         result = this.createAccount({
           ...input,
-          name: identity.name,
+          name: parse(personNameSchema, input.name ?? identity.name),
           email: identity.email,
           password: randomBytes(48).toString('hex'),
         });

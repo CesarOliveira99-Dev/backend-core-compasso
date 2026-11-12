@@ -52,11 +52,12 @@ test('Google first authenticates without registration fields, then completes ver
   assert.equal(repo.list('system', 'sessions').length, 1); // only the owner's pre-existing session
   const result = complete(pending.enrollmentToken, {
     email: 'attacker@test.local',
-    name: 'Fake',
+    name: 'Nome de Exibição',
     sub: 'fake',
   });
   assert.equal(result.user.email, 'customer@test.local');
-  assert.equal(result.user.name, 'Verified Name');
+  // Display name may be corrected during onboarding; verified email/sub remain provider-owned.
+  assert.equal(result.user.name, 'Nome de Exibição');
   assert.equal(result.user.role, 'customer');
   assert.equal(service.authenticate(result.token).id, result.user.id);
   assert.throws(() => complete(pending.enrollmentToken), /expirada/);

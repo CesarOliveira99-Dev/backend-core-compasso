@@ -1,3 +1,4 @@
+import { personNameSchema, phoneSchema } from '../../../core/application/person.schemas.js';
 import { SetMetadata } from '@nestjs/common';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
@@ -20,6 +21,7 @@ export function verifyPassword(password: string, stored: string): boolean {
 export const credentialsSchema = z.object({
   email: z
     .string()
+    .max(254, 'O e-mail deve ter no máximo 254 caracteres.')
     .email()
     .transform((v) => v.toLowerCase()),
   password: z.string().min(8).max(128),
@@ -27,8 +29,8 @@ export const credentialsSchema = z.object({
 });
 export const registrationSchema = credentialsSchema.extend({
   idempotencyKey: z.string().uuid().optional(),
-  name: z.string().trim().min(2).max(100),
-  phone: z.string().min(10).max(20),
+  name: personNameSchema,
+  phone: phoneSchema,
   role: z.enum(['admin', 'customer']),
   businessName: z.string().trim().min(2).max(100).optional(),
   address: businessAddressSchema.optional(),

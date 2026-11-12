@@ -1,3 +1,4 @@
+import { personNameSchema, phoneSchema } from '../../../core/application/person.schemas.js';
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { Context, id, parse } from '../../../core/application/context.js';
@@ -32,7 +33,7 @@ export class CustomersService {
   }
   update(actor: Actor, body: unknown) {
     const input = parse(
-      z.object({ name: z.string().trim().min(2).max(100), phone: z.string().min(10).max(20) }),
+      z.object({ name: personNameSchema, phone: phoneSchema }),
       body,
     );
     const customer = this.context.require<Customer>(actor, 'customers', actor.id);
