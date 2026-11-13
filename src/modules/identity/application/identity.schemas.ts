@@ -32,6 +32,7 @@ export const registrationSchema = credentialsSchema.extend({
   name: personNameSchema,
   phone: phoneSchema,
   role: z.enum(['admin', 'customer']),
+  workspaceMode: z.enum(['store', 'solo']).default('store'),
   businessName: z.string().trim().min(2).max(100).optional(),
   address: businessAddressSchema.optional(),
 });

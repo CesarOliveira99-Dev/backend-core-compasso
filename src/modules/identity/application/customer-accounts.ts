@@ -34,7 +34,7 @@ export class CustomerAccounts {
     const members = repo
       .list<{ tenantId: string }>('system', 'stores')
       .flatMap((store) => repo.list<Customer>(store.tenantId, 'customers'));
-    return [...personal, ...members].filter((user) => !email || user.email === email);
+    return [...personal, ...members].filter((user) => !user.internal && (!email || user.email === email));
   }
 
   google(sub: string): Customer | undefined {

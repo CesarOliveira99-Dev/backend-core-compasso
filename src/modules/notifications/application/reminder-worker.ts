@@ -1,3 +1,4 @@
+import { isSolo } from '../../../core/application/workspace-policy.js';
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Context, timestamp } from '../../../core/application/context.js';
 import type { Actor, Appointment, Loyalty, Settings } from '../../../core/domain/models.js';
@@ -26,6 +27,7 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
   }
   run(now = new Date()) {
     for (const store of this.context.repository.list<{ tenantId: string }>('system', 'stores')) {
+      if (isSolo(this.context.repository, store.tenantId)) continue;
       const settings = this.context.repository.get<Settings>(
         store.tenantId,
         'settings',

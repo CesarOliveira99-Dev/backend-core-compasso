@@ -1,3 +1,4 @@
+import { assertPublicWorkspace, assertWorkspaceOwner } from '../../../core/application/workspace-policy.js';
 import { personNameSchema, phoneSchema } from '../../../core/application/person.schemas.js';
 import { startStoreTrial } from '../../../core/application/store-plans.js';
 import { AccountRecovery } from './account-recovery.js';
@@ -12,7 +13,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { Context, id, parse } from '../../../core/application/context.js';
-import type { Actor, Customer, Settings } from '../../../core/domain/models.js';
+import type { Actor, CatalogItem, Customer, Settings } from '../../../core/domain/models.js';
 import {
   credentialsSchema,
   hashPassword,
@@ -68,12 +69,12 @@ export class IdentityService {
       hasMore: items.length > (input.page + 1) * 8,
     };
   }
-  stores() {
+  stores(includePrivate = false) {
     return this.context.repository
       .list<{ tenantId: string }>('system', 'stores')
       .flatMap(({ tenantId }) => {
         const settings = this.context.repository.get<Settings>(tenantId, 'settings', 'business');
-        return settings
+        return settings && (includePrivate || settings.workspaceMode !== 'solo')
           ? [
               {
                 slug: settings.slug,
@@ -178,6 +179,8 @@ export class IdentityService {
       .flatMap(({ tenantId }) => {
         const settings = this.context.repository.get<Settings>(tenantId, 'settings', 'business');
         if (!settings) return [];
+        const ownsAccount = this.context.repository.get('system', 'accounts', `${settings.slug}:${identity.email}`);
+        if (settings.workspaceMode === 'solo' && !ownsAccount) return [];
         const linked = this.context.repository.get<{ userId: string }>(
           'system',
           'google_accounts',
@@ -247,6 +250,7 @@ export class IdentityService {
         slug: z.string().min(2).max(60).optional(),
         address: businessAddressSchema.optional(),
         role: z.enum(['admin', 'customer']).optional(),
+        workspaceMode: z.enum(['store', 'solo']).default('store'),
         phone: phoneSchema.optional(),
         businessName: z.string().trim().min(2).max(100).optional(),
         password: z.string().min(8).max(128).optional(),
@@ -359,7 +363,7 @@ export class IdentityService {
       } else {
         if (!input.role || !input.phone)
           throw new BadRequestException('Informe telefone e tipo de conta.');
-        if (input.role === 'admin' && !input.businessName)
+        if (input.role === 'admin' && input.workspaceMode !== 'solo' && !input.businessName)
           throw new BadRequestException('Informe o nome do negócio.');
         result = this.createAccount({
           ...input,
@@ -389,6 +393,8 @@ export class IdentityService {
     });
   }
   publicUser(customer: Customer): Actor {
+    if (customer.internal) throw new UnauthorizedException('Contatos internos não possuem acesso à plataforma.');
+    assertWorkspaceOwner(this.context.repository, customer);
     const {
       id,
       tenantId,
@@ -460,6 +466,7 @@ export class IdentityService {
   }
   private createAccount(body: unknown) {
     const parsed = parse(registrationSchema, body);
+    if (parsed.workspaceMode === 'solo' && parsed.role !== 'admin') throw new BadRequestException('Agenda individual exige uma conta de proprietário.');
     if (parsed.role === 'customer' && !parsed.slug)
       return this.session(this.customerAccounts.create(parsed));
     if (parsed.role === 'customer' && this.customerAccounts.find(parsed.email))
@@ -468,13 +475,14 @@ export class IdentityService {
       ...parsed,
       slug: parsed.slug || (parsed.role === 'admin' ? `loja-${id()}` : ''),
     };
-    if (!parsed.slug && parsed.role === 'admin' && (!parsed.address || !parsed.businessName))
+    if (!parsed.slug && parsed.role === 'admin' && parsed.workspaceMode !== 'solo' && (!parsed.address || !parsed.businessName))
       throw new BadRequestException('Informe nome do negócio e localização.');
     if (input.slug && !/^[a-z0-9-]+$/.test(input.slug))
       throw new BadRequestException(
         'Código de loja inválido. Use letras minúsculas, números e hífens.',
       );
     const store = this.context.repository.get<{ tenantId: string }>('system', 'stores', input.slug);
+    if (store) assertPublicWorkspace(this.context.repository, store.tenantId);
     if (input.role === 'admin' && store)
       throw new ConflictException('Este código de loja já está em uso.');
     if (input.role === 'customer' && !store)
@@ -500,11 +508,13 @@ export class IdentityService {
     if (!store) {
       this.context.repository.put('system', 'stores', input.slug, { tenantId });
       const settings: Settings = {
+        workspaceMode: input.workspaceMode,
+        ownerId: customer.id,
         phone: input.phone,
         address: input.address,
         description: '',
         media: [],
-        setupComplete: false,
+        setupComplete: input.workspaceMode === 'solo',
         name: input.name,
         businessName: input.businessName || input.name,
         slug: input.slug,
@@ -519,6 +529,16 @@ export class IdentityService {
         workDays: [0, 1, 2, 3, 4, 5, 6],
       };
       this.context.repository.put(tenantId, 'settings', 'business', settings);
+      if (input.workspaceMode === 'solo') {
+        this.context.repository.put<Customer>(tenantId, 'customers', 'solo-self', {
+          id: 'solo-self', tenantId, role: 'customer', internal: true, systemContact: true,
+          name: 'Compromisso pessoal', email: '', phone: '', passwordHash: hashPassword(randomBytes(48).toString('hex')), addresses: [],
+        });
+        this.context.repository.put<CatalogItem>(tenantId, 'catalog', 'solo-personal', {
+          id: 'solo-personal', name: 'Compromisso pessoal', description: 'Uma reserva privada do seu tempo.',
+          kind: 'service', category: 'Pessoal', priceCents: 0, durationMinutes: 60, active: true, requiresTriage: false,
+        });
+      }
       startStoreTrial(this.context.repository, customer);
     }
     return this.session(customer);
@@ -538,7 +558,7 @@ export class IdentityService {
       if (!passwordChecks.has(hash)) passwordChecks.set(hash, verifyPassword(input.password, hash));
       return passwordChecks.get(hash)!;
     };
-    const matches = this.stores()
+    const matches = this.stores(true)
       .filter((store) => !input.slug || store.slug === input.slug)
       .flatMap((store) => {
         const account = this.context.repository.get<{ tenantId: string; userId: string }>(

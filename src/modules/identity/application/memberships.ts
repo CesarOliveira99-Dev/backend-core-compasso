@@ -1,3 +1,4 @@
+import { assertPublicWorkspace, isSolo } from '../../../core/application/workspace-policy.js';
 import { requireEmployeeSeat } from '../../../core/application/store-plans.js';
 import {
   BadRequestException,
@@ -25,6 +26,7 @@ export class Memberships {
   }
   invite(actor: Actor) {
     this.context.admin(actor);
+    if (isSolo(this.repo, actor.tenantId)) throw new ForbiddenException('A agenda individual não aceita equipe.');
     const token = randomBytes(32).toString('hex');
     const expiresAt = Date.now() + 7 * 86400000;
     this.repo.transaction(() => {
@@ -46,6 +48,7 @@ export class Memberships {
       throw new UnauthorizedException(
         'Convite expirado ou substituído. Peça um novo link ao responsável.',
       );
+    assertPublicWorkspace(this.repo, record.tenantId);
     return record;
   }
   preview(token: string) {
@@ -142,6 +145,7 @@ export class Memberships {
   switchStore(actor: Actor, slug: string): Customer {
     const store = this.repo.get<{ tenantId: string }>('system', 'stores', slug);
     if (!store) throw new BadRequestException('Loja não encontrada.');
+    assertPublicWorkspace(this.repo, store.tenantId);
     const person = this.context.require<Customer>(actor, 'customers', actor.id);
     const identityId = person.identityId || person.id;
     return this.repo.transaction(() => {

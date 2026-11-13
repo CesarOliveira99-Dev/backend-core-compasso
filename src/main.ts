@@ -1,3 +1,4 @@
+import { assertWorkspaceRoute } from './core/application/workspace-policy.js';
 import { RateLimiter } from './core/application/rate-limiter.js';
 import { json, urlencoded } from 'express';
 import { REPOSITORY, type Repository } from './core/domain/document-repository.js';
@@ -72,6 +73,7 @@ const guard: CanActivate = {
               /^(customers\/profile|customers\/addresses\/[\w-]+\/default)$/.test(path);
       if (!allowed) throw new ForbiddenException('Escolha um estabelecimento para continuar.');
     }
+    assertWorkspaceRoute(app.get(Context).repository, request.actor, httpRequest.path.replace(/^\/v1\//, ''), httpRequest.method);
     const upload = httpRequest.path === '/v1/media' && httpRequest.method === 'POST';
     if (upload && request.actor.role !== 'admin') throw new ForbiddenException();
     if (
@@ -85,11 +87,11 @@ const guard: CanActivate = {
       const http = execution.switchToHttp().getRequest<{ path: string; method: string }>();
       const path = http.path.replace(/^\/v1\//, '');
       const readable =
-        /^(auth\/me|catalog|settings|appointments(?:\/availability)?|notifications|professionals)$/.test(
+        /^(workspace\/(?:preferences|analytics|export|customers(?:\/[\w-]+)?)|auth\/me|catalog|settings|appointments(?:\/availability)?|notifications|professionals)$/.test(
           path,
         );
       const writable =
-        /^(auth\/logout|auth\/email\/request|auth\/switch-store|auth\/invite\/accept|notifications(?:\/[^/]+)?|appointments\/[^/]+|professionals\/[^/]+)$/.test(
+        /^(workspace\/(?:preferences|customers\/[\w-]+(?:\/redeem)?|appointments\/[\w-]+\/style)|auth\/logout|auth\/email\/request|auth\/switch-store|auth\/invite\/accept|notifications(?:\/[^/]+)?|appointments\/[^/]+|professionals\/[^/]+)$/.test(
           path,
         );
       if (!(http.method === 'GET' ? readable : writable))

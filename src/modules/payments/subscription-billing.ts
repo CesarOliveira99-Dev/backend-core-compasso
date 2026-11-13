@@ -1,14 +1,15 @@
+import { isSolo } from '../../core/application/workspace-policy.js';
 import { PaymentProviderRejected } from './payment-provider-error.js';
 import { BadRequestException, ConflictException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Context, parse, timestamp } from '../../core/application/context.js';
-import { employeeSeats, planPrice, findPlan, STORE_PLANS, storeEntitlement, type PlanId, type StoreSubscription } from '../../core/application/store-plans.js';
+import { employeeSeats, planPrice, findPlan, STORE_PLANS, SOLO_PLANS, storeEntitlement, type PlanId, type StoreSubscription } from '../../core/application/store-plans.js';
 import { emailQuota } from '../../core/application/email-quota.js';
 import type { Actor } from '../../core/domain/models.js';
 
 type Call = <T>(path: string, token?: string, body?: unknown, key?: string, method?: 'PUT') => Promise<T>;
-interface Reference { tenantId: string; planId: PlanId; priceCents: number; extraEmployees?: number; priceHistory?: number[] }
+interface Reference { tenantId: string; planId: PlanId; priceCents: number; extraEmployees?: number; priceHistory?: number[]; periodMonths?: number }
 interface ExtraChange { subscriptionId: string; extraEmployees: number; priceCents: number; createdAt: string }
 interface Setup extends Reference { key: string; reference: string; createdAt: number }
 const scope = '__compasso_payments__';
@@ -18,7 +19,7 @@ const preapprovalSchema = z.object({
   id: identifier, collector_id: z.union([z.number(), z.string()]),
   external_reference: z.string(), status: z.enum(['pending', 'authorized', 'paused', 'cancelled', 'canceled']),
   init_point: z.url(), auto_recurring: z.object({ transaction_amount: z.number().positive(), currency_id: z.literal('BRL'),
-    frequency: z.literal(1), frequency_type: z.literal('months') }),
+    frequency: z.union([z.literal(1), z.literal(12)]), frequency_type: z.literal('months') }),
 });
 const numberId = z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]);
 const invoiceSchema = z.object({ id: numberId, preapproval_id: identifier, currency_id: z.string(),
@@ -29,10 +30,10 @@ const chargeSchema = z.object({ id: numberId, collector_id: numberId, currency_i
   transaction_amount: z.number().positive(), transaction_amount_refunded: z.number().nonnegative().optional(),
   live_mode: z.boolean(), status: z.string(), date_approved: z.string().nullable().optional() });
 
-/** Add one calendar month without overflowing February or short months. */
-export function subscriptionPeriodEnd(start: number) {
+/** Add billing calendar months without overflowing February or short months. */
+export function subscriptionPeriodEnd(start: number, months = 1) {
   const date = new Date(start), day = date.getUTCDate();
-  date.setUTCDate(1); date.setUTCMonth(date.getUTCMonth() + 1);
+  date.setUTCDate(1); date.setUTCMonth(date.getUTCMonth() + months);
   const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
   date.setUTCDate(Math.min(day, last));
   return date.getTime();
@@ -49,7 +50,7 @@ export class SubscriptionBilling {
     this.context.admin(actor);
     const access = storeEntitlement(this.repo, actor.tenantId);
     const subscription = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
-    return { billingEnabled: this.enabled(), plans: STORE_PLANS, entitlement: access,
+    return { billingEnabled: this.enabled(), plans: isSolo(this.repo, actor.tenantId) ? SOLO_PLANS : STORE_PLANS, entitlement: access,
       emailUsage: emailQuota(this.repo, actor.tenantId), employeesUsed: employeeSeats(this.repo, actor.tenantId),
       extrasPending: !!this.repo.get(actor.tenantId, 'billing', 'extras_change'),
       setupPending: !!this.repo.get(actor.tenantId, 'billing', 'subscription_setup'),
@@ -58,10 +59,13 @@ export class SubscriptionBilling {
   }
   async subscribe(actor: Actor, body: unknown) {
     this.context.admin(actor);
-    const { planId, extraEmployees } = parse(z.object({ planId: z.enum(['essencial', 'profissional', 'equipe']), extraEmployees: z.number().int().min(0).max(90).default(0) }).strict(), body);
+    const { planId, extraEmployees } = parse(z.object({ planId: z.enum(['essencial', 'profissional', 'equipe', 'solo-mensal', 'solo-anual']), extraEmployees: z.number().int().min(0).max(90).default(0) }).strict(), body);
+    const solo = isSolo(this.repo, actor.tenantId);
+    if (solo !== planId.startsWith('solo-')) throw new ForbiddenException('Plano incompatível com a modalidade da conta.');
     const priceCents = planPrice(planId, extraEmployees);
     if (!this.enabled()) throw new ServiceUnavailableException('A contratação dos planos ainda não foi ativada.');
     const plan = findPlan(planId)!;
+    const periodMonths = 'periodMonths' in plan ? plan.periodMonths : 1;
     if (employeeSeats(this.repo, actor.tenantId) > plan.employees + extraEmployees)
       throw new BadRequestException(`Desative os funcionários excedentes antes de contratar este plano de até ${plan.employees} funcionário(s).`);
     const existing = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
@@ -84,7 +88,7 @@ export class SubscriptionBilling {
       const app = new URL(process.env.APP_URL!), api = new URL(process.env.PUBLIC_API_URL!);
       if (app.protocol !== 'https:' || api.protocol !== 'https:') throw new BadRequestException('Assinaturas exigem URLs HTTPS.');
       const key = randomUUID();
-      const setup: Setup = { tenantId: actor.tenantId, planId, priceCents, extraEmployees, key,
+      const setup: Setup = { tenantId: actor.tenantId, planId, priceCents, extraEmployees, periodMonths, key,
         reference: `${referencePrefix}${actor.tenantId}:${key}`, createdAt: Date.now() };
       this.repo.transaction(() => {
         this.repo.put(actor.tenantId, 'billing', 'subscription_setup', setup);
@@ -93,9 +97,9 @@ export class SubscriptionBilling {
       // Never recreate a pending setup after a transport failure. Recover by reference instead.
       const access = storeEntitlement(this.repo, actor.tenantId);
       const result = await this.call<unknown>('/preapproval', this.token(), {
-        reason: `Compasso ${plan.name} — assinatura mensal`, external_reference: setup.reference,
+        reason: `Compasso ${plan.name} — assinatura ${periodMonths === 12 ? 'anual' : 'mensal'}`, external_reference: setup.reference,
         payer_email: actor.email, back_url: app.toString(),
-        auto_recurring: { frequency: 1, frequency_type: 'months', transaction_amount: priceCents / 100, currency_id: 'BRL',
+        auto_recurring: { frequency: periodMonths, frequency_type: 'months', transaction_amount: priceCents / 100, currency_id: 'BRL',
           ...(access.mode === 'trial' ? { start_date: new Date(access.expiresAt).toISOString() } : {}) },
         status: 'pending',
       }, key);
@@ -159,7 +163,8 @@ export class SubscriptionBilling {
     const actualPrice = Math.round(result.auto_recurring.transaction_amount * 100);
     const changed = pending && pending.subscriptionId === result.id && pending.priceCents === actualPrice;
     if (!reference || String(result.collector_id) !== process.env.MP_PLATFORM_USER_ID ||
-        (actualPrice !== reference.priceCents && !changed))
+        (actualPrice !== reference.priceCents && !changed) ||
+        result.auto_recurring.frequency !== (reference?.periodMonths || 1))
       throw new ForbiddenException('Assinatura, recebedor ou valor incompatível.');
     const url = new URL(result.init_point);
     if (url.protocol !== 'https:' || !/(^|\.)mercadopago\.com(\.br)?$/.test(url.hostname))
@@ -173,7 +178,7 @@ export class SubscriptionBilling {
         throw new ConflictException('A loja possui outra assinatura vigente.');
       const terms: Reference = changed ? { ...reference, priceCents: pending.priceCents, extraEmployees: pending.extraEmployees,
         priceHistory: [...new Set([...(reference.priceHistory || []), reference.priceCents])] } : reference;
-      const record: StoreSubscription = { id: result.id, planId: terms.planId, priceCents: terms.priceCents, extraEmployees: terms.extraEmployees || 0,
+      const record: StoreSubscription = { id: result.id, planId: terms.planId, priceCents: terms.priceCents, periodMonths: terms.periodMonths || 1, extraEmployees: terms.extraEmployees || 0,
         url: result.init_point, status: result.status === 'canceled' ? 'cancelled' : result.status,
         externalReference: result.external_reference, checkedAt: timestamp(),
         ...(previous?.id === result.id ? { paidThrough: previous.paidThrough } : {}) };
@@ -248,7 +253,7 @@ export class SubscriptionBilling {
       const previous = this.repo.get<{ paymentId: string; approved: boolean }>(owner!.tenantId, 'subscription_invoices', id);
       if (previous?.approved && previous.paymentId !== String(charge.id)) throw new ConflictException('Fatura já possui outro pagamento.');
       this.repo.put(owner!.tenantId, 'subscription_invoices', id, { id, subscriptionId: invoice.preapproval_id,
-        paymentId: String(charge.id), approved, endsAt: approved ? subscriptionPeriodEnd(debit) : 0 });
+        paymentId: String(charge.id), approved, endsAt: approved ? subscriptionPeriodEnd(debit, owner!.periodMonths || 1) : 0 });
       this.repo.put(scope, 'billing_payment_invoices', String(charge.id), { invoiceId: id });
       this.recompute(owner!.tenantId, invoice.preapproval_id);
     });

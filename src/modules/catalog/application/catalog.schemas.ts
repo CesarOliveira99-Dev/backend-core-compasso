@@ -17,3 +17,4 @@ export const itemSchema = z
     (item) => item.kind !== 'service' || item.durationMinutes > 0,
     'Serviços precisam de duração.',
   );
+export const soloItemSchema = itemSchema.safeExtend({ priceCents: z.number().int().min(0).max(100000000) });

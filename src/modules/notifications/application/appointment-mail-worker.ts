@@ -1,3 +1,4 @@
+import { isSolo } from '../../../core/application/workspace-policy.js';
 import { reserveEmail, finishEmail, beginEmailAttempt, notifyEmailQuota } from '../../../core/application/email-quota.js';
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Context } from '../../../core/application/context.js';
@@ -46,6 +47,7 @@ export class AppointmentMailWorker implements OnModuleInit, OnModuleDestroy {
       let processed = 0;
       const repository = this.context.repository;
       for (const store of repository.list<{ tenantId: string }>('system', 'stores')) {
+        if (isSolo(repository, store.tenantId)) continue;
         for (const job of repository.list<AppointmentMailJob>(store.tenantId, 'appointment_mail')) {
           if (job.state !== 'pending' || job.nextAttemptAt > now) continue;
           // Stop well inside Resend's 24-hour idempotency window, even after downtime.

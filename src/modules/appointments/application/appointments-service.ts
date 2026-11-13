@@ -1,4 +1,5 @@
 import { requireStoreService } from '../../../core/application/store-plans.js';
+import { assertWorkspaceOwner } from '../../../core/application/workspace-policy.js';
 import { freeSlots, scheduleWindow, slotIssue, validCalendarDate } from '../domain/availability.js';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { z } from 'zod';
@@ -26,7 +27,13 @@ export class AppointmentsService {
     private readonly context: Context,
     private readonly professionals: ProfessionalsService,
   ) {}
+  private view(actor: Actor, appointment: Appointment): Appointment {
+    if (actor.role !== 'customer') return appointment;
+    const { categoryId: _id, categoryName: _name, categoryColor: _color, ...visible } = appointment;
+    return visible;
+  }
   list(actor: Actor): Appointment[] {
+    assertWorkspaceOwner(this.context.repository, actor);
     return this.context.repository
       .list<Appointment>(
         actor.tenantId,
@@ -34,6 +41,7 @@ export class AppointmentsService {
         actor.role === 'admin' ? {} : actor.role === 'employee' ? {professionalId: actor.professionalId || '__none__'} : { customerId: actor.id },
       )
       .filter((a) => actor.role === 'admin' || (actor.role === 'employee' ? a.professionalId === actor.professionalId : a.customerId === actor.id))
+      .map(appointment => this.view(actor, appointment))
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
   }
   private access(actor:Actor, appointment:Appointment) {
@@ -157,7 +165,7 @@ export class AppointmentsService {
     if (previous) {
       if (previous.fingerprint !== fingerprint)
         throw new BadRequestException('Chave já utilizada em outro agendamento.');
-      return this.context.require<Appointment>(actor, 'appointments', previous.appointmentId);
+      return this.view(actor, this.context.require<Appointment>(actor, 'appointments', previous.appointmentId));
     }
 
     requireStoreService(this.context.repository, actor.tenantId);
@@ -235,7 +243,7 @@ export class AppointmentsService {
       `${customer.name} solicitou ${item.name}.`,
     );
     queueAppointmentMail(this.context, actor, appointment, 'confirmation');
-    return appointment;
+    return this.view(actor, appointment);
   }
   transition(actor: Actor, appointmentId: string, body: unknown) {
     const input = parse(
@@ -280,7 +288,7 @@ export class AppointmentsService {
         appointment.startsAt = input.startsAt;
       }
       if (input.status) {
-        if (appointment.status === input.status) return appointment;
+        if (appointment.status === input.status) return this.view(actor, appointment);
         if (
           appointment.status === 'cancelled' ||
           appointment.status === 'completed' ||
@@ -326,12 +334,13 @@ export class AppointmentsService {
       }
       if (input.startsAt && input.startsAt !== this.context.require<Appointment>(actor, 'appointments', appointment.id).startsAt)
         queueAppointmentMail(this.context, actor, appointment, 'confirmation');
-      return this.context.repository.put(
+      const saved = this.context.repository.put(
         actor.tenantId,
         'appointments',
         appointment.id,
         appointment,
       );
+      return this.view(actor, saved);
     });
   }
 }

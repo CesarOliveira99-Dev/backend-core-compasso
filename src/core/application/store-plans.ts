@@ -1,3 +1,4 @@
+import { isSolo } from './workspace-policy.js';
 import { ForbiddenException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { Repository } from '../domain/document-repository.js';
@@ -8,8 +9,13 @@ export const STORE_PLANS = [
   { id: 'profissional', name: 'Profissional', priceCents: 7990, employees: 5, monthlyEmails: 2500, dailyEmails: 200 },
   { id: 'equipe', name: 'Equipe', priceCents: 9990, employees: 10, monthlyEmails: 5000, dailyEmails: 400, extraEmployeePriceCents: 2500 },
 ] as const;
-export type PlanId = typeof STORE_PLANS[number]['id'];
-export const findPlan = (id: string) => STORE_PLANS.find(plan => plan.id === id);
+export const SOLO_PLANS = [
+  { id: 'solo-mensal', name: 'Solo mensal', priceCents: 1500, employees: 0, monthlyEmails: 0, dailyEmails: 0, periodMonths: 1 },
+  { id: 'solo-anual', name: 'Solo anual', priceCents: 11000, employees: 0, monthlyEmails: 0, dailyEmails: 0, periodMonths: 12 },
+] as const;
+const ALL_PLANS = [...STORE_PLANS, ...SOLO_PLANS];
+export type PlanId = typeof ALL_PLANS[number]['id'];
+export const findPlan = (id: string) => ALL_PLANS.find(plan => plan.id === id);
 export function planPrice(planId: PlanId, extraEmployees = 0) {
   if (!Number.isSafeInteger(extraEmployees) || extraEmployees < 0 || extraEmployees > 90 || (planId !== 'equipe' && extraEmployees !== 0))
     throw new ForbiddenException('Colaboradores extras estão disponíveis somente no plano Equipe, até 100 colaboradores no total.');
@@ -20,6 +26,7 @@ export interface StoreSubscription {
   id: string; planId: PlanId; priceCents: number; url: string; status: string;
   externalReference: string; paidThrough?: number; checkedAt?: string;
   extraEmployees?: number;
+  periodMonths?: number;
 }
 
 /** Called inside the account creation transaction. Customers never receive a trial or billing record. */
@@ -39,7 +46,7 @@ export function storeEntitlement(repo: Repository, tenantId: string, now = Date.
   if (plan && (subscription.paidThrough || 0) > now)
     return { mode: 'active' as const, plan: { ...plan, employees: plan.employees + (subscription.extraEmployees || 0), priceCents: subscription.priceCents }, expiresAt: subscription.paidThrough!, trialEndsAt: trial?.endsAt };
   if (trial && trial.endsAt > now)
-    return { mode: 'trial' as const, plan: STORE_PLANS[2], expiresAt: trial.endsAt, trialEndsAt: trial.endsAt };
+    return { mode: 'trial' as const, plan: isSolo(repo, tenantId) ? SOLO_PLANS[0] : STORE_PLANS[2], expiresAt: trial.endsAt, trialEndsAt: trial.endsAt };
   if (!trial && !subscription?.planId)
     return { mode: 'pilot' as const, plan: null, expiresAt: null, trialEndsAt: undefined };
   return { mode: 'expired' as const, plan: null, expiresAt: null, trialEndsAt: trial?.endsAt };

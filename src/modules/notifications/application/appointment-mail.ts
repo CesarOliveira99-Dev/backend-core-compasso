@@ -1,3 +1,4 @@
+import { isSolo } from '../../../core/application/workspace-policy.js';
 import { createHash } from 'node:crypto';
 import { Context } from '../../../core/application/context.js';
 import type { Actor, Appointment, Customer, Settings } from '../../../core/domain/models.js';
@@ -30,6 +31,7 @@ export function queueAppointmentMail(
   kind: AppointmentMailKind,
   now = Date.now(),
 ) {
+  if (isSolo(context.repository, actor.tenantId)) return;
   if (!appointmentMailEnabled() || appointment.status !== 'confirmed') return;
   const repository = context.repository;
   const customer = repository.get<Customer>(actor.tenantId, 'customers', appointment.customerId);

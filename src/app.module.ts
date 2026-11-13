@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { WorkspaceModule } from './modules/workspace/workspace.module.js';
 import { Context } from './core/application/context.js';
 import { DocumentRepository, REPOSITORY } from './core/infrastructure/document.repository.js';
 import { AppointmentsModule } from './modules/appointments/appointments.module.js';
@@ -26,6 +27,7 @@ class CoreModule {}
 @Module({
   controllers: [HealthController],
   imports: [
+    WorkspaceModule,
     CoreModule,
     MediaModule,
     IdentityModule,

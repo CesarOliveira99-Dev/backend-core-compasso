@@ -1,10 +1,12 @@
 import { recentBookingCounts } from '../domain/popularity.js';
+import { isSolo } from '../../../core/application/workspace-policy.js';
+import { BadRequestException } from '@nestjs/common';
 import { MediaService } from '../../media/media.module.js';
 import { Injectable } from '@nestjs/common';
 import { Context, id, parse } from '../../../core/application/context.js';
 import type { Actor, Appointment, CatalogItem, Discount } from '../../../core/domain/models.js';
 import { discountApplies, discountedPrice, localWeekday } from '../../../core/domain/policies.js';
-import { itemSchema } from './catalog.schemas.js';
+import { itemSchema, soloItemSchema } from './catalog.schemas.js';
 @Injectable()
 export class CatalogService {
   constructor(
@@ -45,7 +47,9 @@ export class CatalogService {
   }
   save(actor: Actor, body: unknown, itemId = id()) {
     this.context.admin(actor);
-    const input = parse(itemSchema, body);
+    const input = parse(isSolo(this.context.repository, actor.tenantId) ? soloItemSchema : itemSchema, body);
+    if (isSolo(this.context.repository, actor.tenantId) && (input.kind !== 'service' || input.media?.length || input.requiresTriage))
+      throw new BadRequestException('A agenda individual permite serviços sem mídia e sem triagem pública.');
     this.media.validate(actor, input.media);
     const previous=this.context.repository.get<CatalogItem>(actor.tenantId,'catalog',itemId);
     const result=this.context.repository.put(actor.tenantId, 'catalog', itemId, { ...input, id: itemId });

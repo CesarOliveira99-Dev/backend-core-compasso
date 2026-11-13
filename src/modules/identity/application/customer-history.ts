@@ -14,12 +14,12 @@ export class CustomerHistory {
     const identityId = actor.identityId || actor.id;
     return repo.list<{ tenantId: string }>('system', 'stores').flatMap((store) => {
       const settings = repo.get<Settings>(store.tenantId, 'settings', 'business');
-      if (!settings) return [];
+      if (!settings || settings.workspaceMode === 'solo') return [];
       const members = repo.list<Customer>(store.tenantId, 'customers', { identityId });
       const current = store.tenantId === actor.tenantId
         ? repo.get<Customer>(store.tenantId, 'customers', actor.id) : undefined;
       if (current && !members.some((member) => member.id === current.id)) members.push(current);
-      return members.filter((member) => member.role === 'customer' && member.active !== false &&
+      return members.filter((member) => member.role === 'customer' && !member.internal && member.active !== false &&
         (member.identityId || member.id) === identityId).flatMap((member) =>
         repo.list<Appointment>(store.tenantId, 'appointments', { customerId: member.id })
           .filter((appointment) => appointment.customerId === member.id && appointment.status === 'completed')

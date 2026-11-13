@@ -1,3 +1,4 @@
+import { assertPublicWorkspace } from '../../../../core/application/workspace-policy.js';
 import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
 import { Context, parse } from '../../../../core/application/context.js';
 import type { Actor, Settings } from '../../../../core/domain/models.js';
@@ -21,6 +22,7 @@ export class PublicStoreController {
   get(@Param('slug') value: string) {
     const slug = parse(z.string().min(2).max(60), value);
     const store = this.context.repository.get<{ tenantId: string }>('system', 'stores', slug);
+    if (store) assertPublicWorkspace(this.context.repository, store.tenantId);
     const settings =
       store && this.context.repository.get<Settings>(store.tenantId, 'settings', 'business');
     if (!store || !settings) throw new NotFoundException('Estabelecimento não encontrado.');

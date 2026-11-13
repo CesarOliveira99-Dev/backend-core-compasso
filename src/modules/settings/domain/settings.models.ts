@@ -14,6 +14,8 @@ export interface MediaAsset {
   alt: string;
 }
 export interface Settings {
+  workspaceMode?: 'store' | 'solo';
+  ownerId?: string;
   phone?: string;
   address?: BusinessAddress;
   description?: string;
