@@ -152,7 +152,12 @@ export class SubscriptionBilling {
   }
   private savePreapproval(raw: unknown, expectedReference?: string) {
     const parsed = preapprovalSchema.safeParse(raw);
-    if (!parsed.success) throw new BadRequestException('Resposta de assinatura inválida.');
+    if (!parsed.success) {
+      console.warn('Mercado Pago invalid subscription response', {
+        issues: parsed.error.issues.map(issue => ({ path: issue.path.join('.'), code: issue.code })),
+      });
+      throw new BadRequestException('Resposta de assinatura inválida.');
+    }
     const result = parsed.data;
     if (expectedReference && result.external_reference !== expectedReference)
       throw new ForbiddenException('Referência da assinatura incompatível.');
