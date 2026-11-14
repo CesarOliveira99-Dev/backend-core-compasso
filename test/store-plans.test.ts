@@ -94,7 +94,7 @@ function fixture() {
   billingEnv(); const repo = new DocumentRepository();
   let external = '', status = 'authorized', paymentStatus = 'approved', collector = 123, amount = 59.9, refunded = 0, live = false;
   let creates = 0, fail = false;
-  const preapproval = () => ({ id: 'sub', collector_id: 123, external_reference: external, status, init_point: 'https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=sub',
+  const preapproval = () => ({ id: 'sub', collector_id: 123, external_reference: external, status, init_point: status === 'cancelled' ? undefined : 'https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=sub',
     auto_recurring: { transaction_amount: amount, currency_id: 'BRL', frequency: 1, frequency_type: 'months' } });
   const bodies: any[] = [];
   const call = async (path: string, _token?: string, body?: any) => {
@@ -177,3 +177,4 @@ test('payment search cannot grant a subscription for a different payment ID', as
   assert.equal(await f.service.payment('42'), true);
   assert.equal(storeEntitlement(f.repo, 'store').mode, 'active');
 });
+
