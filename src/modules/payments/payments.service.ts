@@ -251,8 +251,14 @@ export class PaymentsService {
     } catch {
       throw new ServiceUnavailableException('Mercado Pago indisponível. Tente novamente.');
     }
-    if (response.status >= 400 && response.status < 500 && method === 'PUT')
-      throw new PaymentProviderRejected('O Mercado Pago recusou a alteração. Confira a situação antes de tentar novamente.');
+    if (response.status >= 400 && response.status < 500 && method === 'PUT') {
+      const payload = await response.json().catch(() => null) as { error?: unknown; cause?: { code?: unknown }[] } | null;
+      const candidate = payload?.cause?.[0]?.code ?? payload?.error;
+      const code = (typeof candidate === 'string' || typeof candidate === 'number') && /^[a-zA-Z0-9_-]{1,64}$/.test(String(candidate))
+        ? String(candidate) : null;
+      console.warn('Mercado Pago rejected subscription update', { status: response.status, code, requestId: response.headers.get('x-request-id') });
+      throw new PaymentProviderRejected(`O Mercado Pago recusou a alteração (HTTP ${response.status}${code ? `, código ${code}` : ''}). Confira a situação antes de tentar novamente.`);
+    }
     if (!response.ok)
       throw new ServiceUnavailableException(
         'Não foi possível concluir no Mercado Pago. Confira a configuração e tente novamente.',

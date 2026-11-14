@@ -115,6 +115,6 @@ test('HTTP 400 from the real PUT transport is definitive and does not leave a pa
    return Response.json(await f.call(new URL(String(url)).pathname,'fixture',init?.body?JSON.parse(String(init.body)):undefined));
  });
  await service.billing.subscribe(owner,{planId:'equipe'});await service.billing.invoice('44');
- await assert.rejects(()=>service.billing.changeExtras(owner,{extraEmployees:1,expectedPriceCents:12490}),/recusou/);
+ await assert.rejects(()=>service.billing.changeExtras(owner,{extraEmployees:1,expectedPriceCents:12490}),/HTTP 400, código rejected/);
  assert.equal(service.billing.status(owner).extrasPending,false);assert.equal(service.billing.status(owner).subscription?.extraEmployees,0);
 });
