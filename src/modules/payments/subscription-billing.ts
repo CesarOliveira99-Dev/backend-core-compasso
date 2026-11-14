@@ -64,8 +64,6 @@ export class SubscriptionBilling {
     if (solo !== planId.startsWith('solo-')) throw new ForbiddenException('Plano incompatível com a modalidade da conta.');
     const priceCents = planPrice(planId, extraEmployees);
     if (!this.enabled()) throw new ServiceUnavailableException('A contratação dos planos ainda não foi ativada.');
-    if (storeEntitlement(this.repo, actor.tenantId).mode === 'trial')
-      throw new ConflictException('A contratação ficará disponível ao terminar o teste grátis. Nenhuma cobrança será iniciada durante o teste.');
     const plan = findPlan(planId)!;
     const periodMonths = 'periodMonths' in plan ? plan.periodMonths : 1;
     if (employeeSeats(this.repo, actor.tenantId) > plan.employees + extraEmployees)

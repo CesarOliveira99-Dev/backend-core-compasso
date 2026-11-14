@@ -114,17 +114,15 @@ function fixture() {
   } };
 }
 
-test('catalog prices are server controlled and a trial cannot start a provider checkout', async () => {
+test('catalog prices are server controlled and checkout during a trial does not grant paid access', async () => {
   const f = fixture(); startStoreTrial(f.repo, owner, now);
   await assert.rejects(() => f.service.subscribe({ ...owner, role: 'customer' }, { planId: 'essencial' }));
   await assert.rejects(() => f.service.subscribe(owner, { planId: 'essencial', priceCents: 1 }));
   assert.equal(f.creates(), 0);
-  await assert.rejects(() => f.service.subscribe(owner, { planId: 'essencial' }), /terminar o teste grátis/);
-  assert.equal(f.creates(), 0);
-  assert.equal(storeEntitlement(f.repo, 'store').mode, 'trial');
-  f.repo.remove('store', 'billing', 'trial');
   await f.service.subscribe(owner, { planId: 'essencial' });
   assert.equal(f.bodies[0].auto_recurring.transaction_amount, 59.9);
+  assert.equal(f.bodies[0].auto_recurring.start_date, undefined);
+  assert.equal(storeEntitlement(f.repo, 'store').mode, 'trial');
   await f.service.subscribe(owner, { planId: 'essencial' }); assert.equal(f.creates(), 1);
   assert.deepEqual(STORE_PLANS.map(p => p.priceCents), [5990, 7990, 9990]);
 });
