@@ -18,7 +18,7 @@ const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/);
 const preapprovalSchema = z.object({
   id: identifier, collector_id: z.union([z.number(), z.string()]),
   external_reference: z.string(), status: z.enum(['pending', 'authorized', 'paused', 'cancelled', 'canceled']),
-  init_point: z.url(), auto_recurring: z.object({ transaction_amount: z.number().positive(), currency_id: z.literal('BRL'),
+  init_point: z.url().nullish(), auto_recurring: z.object({ transaction_amount: z.number().positive(), currency_id: z.literal('BRL'),
     frequency: z.union([z.literal(1), z.literal(12)]), frequency_type: z.literal('months') }),
 });
 const numberId = z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]);
@@ -169,8 +169,9 @@ export class SubscriptionBilling {
         (actualPrice !== reference.priceCents && !changed) ||
         result.auto_recurring.frequency !== (reference?.periodMonths || 1))
       throw new ForbiddenException('Assinatura, recebedor ou valor incompatível.');
-    const url = new URL(result.init_point);
-    if (url.protocol !== 'https:' || !/(^|\.)mercadopago\.com(\.br)?$/.test(url.hostname))
+    const cancelled = result.status === 'cancelled' || result.status === 'canceled';
+    const url = result.init_point ? new URL(result.init_point) : null;
+    if ((!url && !cancelled) || (url && (url.protocol !== 'https:' || !/(^|\.)mercadopago\.com(\.br)?$/.test(url.hostname))))
       throw new ForbiddenException('Endereço da assinatura inválido.');
     return this.repo.transaction(() => {
       const previous = this.repo.get<StoreSubscription>(reference.tenantId, 'billing', 'subscription');
@@ -182,7 +183,7 @@ export class SubscriptionBilling {
       const terms: Reference = changed ? { ...reference, priceCents: pending.priceCents, extraEmployees: pending.extraEmployees,
         priceHistory: [...new Set([...(reference.priceHistory || []), reference.priceCents])] } : reference;
       const record: StoreSubscription = { id: result.id, planId: terms.planId, priceCents: terms.priceCents, periodMonths: terms.periodMonths || 1, extraEmployees: terms.extraEmployees || 0,
-        url: result.init_point, status: result.status === 'canceled' ? 'cancelled' : result.status,
+        url: result.init_point || '', status: result.status === 'canceled' ? 'cancelled' : result.status,
         externalReference: result.external_reference, checkedAt: timestamp(),
         ...(previous?.id === result.id ? { paidThrough: previous.paidThrough } : {}) };
       this.repo.put(reference.tenantId, 'billing', 'subscription', record);
@@ -298,3 +299,4 @@ export class SubscriptionBilling {
     return handled;
   }
 }
+
