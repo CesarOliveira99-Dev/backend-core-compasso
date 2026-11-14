@@ -252,7 +252,7 @@ export class PaymentsService {
       throw new ServiceUnavailableException('Mercado Pago indisponível. Tente novamente.');
     }
     if (response.status >= 400 && response.status < 500 && method === 'PUT')
-      throw new PaymentProviderRejected('O Mercado Pago recusou a alteração. Nenhuma vaga adicional foi liberada.');
+      throw new PaymentProviderRejected('O Mercado Pago recusou a alteração. Confira a situação antes de tentar novamente.');
     if (!response.ok)
       throw new ServiceUnavailableException(
         'Não foi possível concluir no Mercado Pago. Confira a configuração e tente novamente.',

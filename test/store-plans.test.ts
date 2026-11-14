@@ -95,12 +95,12 @@ function fixture() {
   let external = '', status = 'authorized', paymentStatus = 'approved', collector = 123, amount = 59.9, refunded = 0, live = false;
   let creates = 0, fail = false;
   const preapproval = () => ({ id: 'sub', collector_id: 123, external_reference: external, status, init_point: 'https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=sub',
-    auto_recurring: { transaction_amount: 59.9, currency_id: 'BRL', frequency: 1, frequency_type: 'months' } });
+    auto_recurring: { transaction_amount: amount, currency_id: 'BRL', frequency: 1, frequency_type: 'months' } });
   const bodies: any[] = [];
   const call = async (path: string, _token?: string, body?: any) => {
-    if (path === '/preapproval') { creates++; bodies.push(body); external = body.external_reference; if (fail) throw new Error('network'); return preapproval(); }
+    if (path === '/preapproval') { creates++; bodies.push(body); external = body.external_reference; amount = body.auto_recurring.transaction_amount; if (fail) throw new Error('network'); return preapproval(); }
     if (path.startsWith('/preapproval/search')) return { results: [preapproval()] };
-    if (path === '/preapproval/sub') return preapproval();
+    if (path === '/preapproval/sub') { if (body?.status === 'canceled') status = 'canceled'; return preapproval(); }
     if (path.startsWith('/authorized_payments/search')) return { results: [{ id: 44 }] };
     if (path === '/authorized_payments/44') return { id: 44, preapproval_id: 'sub', currency_id: 'BRL', transaction_amount: '59.90', debit_date: new Date(now).toISOString(), payment: { id: 42 } };
     if (path === '/v1/payments/42') return { id: 42, collector_id: collector, currency_id: 'BRL', transaction_amount: amount,
@@ -114,18 +114,33 @@ function fixture() {
   } };
 }
 
-test('catalog prices are server controlled, customer cannot subscribe, authorized alone is not paid, trial starts billing after its end', async () => {
+test('catalog prices are server controlled and a trial cannot start a provider checkout', async () => {
   const f = fixture(); startStoreTrial(f.repo, owner, now);
   await assert.rejects(() => f.service.subscribe({ ...owner, role: 'customer' }, { planId: 'essencial' }));
   await assert.rejects(() => f.service.subscribe(owner, { planId: 'essencial', priceCents: 1 }));
   assert.equal(f.creates(), 0);
+  await assert.rejects(() => f.service.subscribe(owner, { planId: 'essencial' }), /terminar o teste grátis/);
+  assert.equal(f.creates(), 0);
+  assert.equal(storeEntitlement(f.repo, 'store').mode, 'trial');
+  f.repo.remove('store', 'billing', 'trial');
   await f.service.subscribe(owner, { planId: 'essencial' });
   assert.equal(f.bodies[0].auto_recurring.transaction_amount, 59.9);
-  assert.equal(Date.parse(f.bodies[0].auto_recurring.start_date), now + 14 * 86400000);
-  assert.equal(storeEntitlement(f.repo, 'store').mode, 'trial');
-  assert.equal(f.service.status(owner).subscription?.paidThrough, undefined);
   await f.service.subscribe(owner, { planId: 'essencial' }); assert.equal(f.creates(), 1);
   assert.deepEqual(STORE_PLANS.map(p => p.priceCents), [5990, 7990, 9990]);
+});
+
+test('an unpaid pending checkout can be cancelled before choosing another plan', async () => {
+  const f = fixture(); f.mutate({ status: 'pending' });
+  await f.service.subscribe(owner, { planId: 'essencial' });
+  assert.equal(f.service.status(owner).subscription?.status, 'pending');
+  await f.service.cancelPending(owner);
+  assert.equal(f.service.status(owner).subscription?.status, 'cancelled');
+  f.mutate({ status: 'pending' });
+  await f.service.subscribe(owner, { planId: 'profissional' });
+  assert.equal(f.creates(), 2);
+  await assert.rejects(() => f.service.cancelPending({ ...owner, tenantId: 'another-store' }), /Somente uma contratação pendente/);
+  f.mutate({ status: 'authorized' });
+  await assert.rejects(() => f.service.cancelPending(owner), /mudou no Mercado Pago/);
 });
 
 test('approved invoice activates only its store, duplicates cannot extend period; wrong amounts, collector and environment fail; refunds revoke', async () => {

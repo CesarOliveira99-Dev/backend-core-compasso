@@ -38,9 +38,10 @@ Uma reserva é persistida antes do envio; retentativas usam o mesmo identificado
 
 No painel Mercado Pago, configurar a URL `PUBLIC_API_URL/payments/webhook` para os eventos `subscription_preapproval`, `subscription_authorized_payment` e `payment`, conforme os tipos de eventos disponíveis no painel. O retorno do navegador não ativa o plano. O backend valida assinatura do webhook, consulta assinatura/fatura/pagamento na API e confere referência local, loja, recebedor, moeda, valor e ambiente. Uma assinatura autorizada sem fatura paga não é um período pago.
 
-O proprietário confirma plano e recorrência antes de ir ao Mercado Pago. Se contratar durante o teste, o pedido de assinatura informa `auto_recurring.start_date` com o término original do teste. Só uma fatura aprovada libera o período pago. Cancelamento preserva o período já pago; estorno/reembolso remove o direito associado àquela fatura. O vencimento usa um mês de calendário a partir do débito, ajustando o último dia dos meses curtos.
+O proprietário confirma plano e recorrência antes de ir ao Mercado Pago. Durante o teste grátis, a contratação fica bloqueada no servidor: o checkout real apresentou cobrança imediata apesar de `auto_recurring.start_date` futuro. Após o teste, a contratação pode começar com cobrança imediata. Só uma fatura aprovada libera o período pago. Cancelamento preserva o período já pago; estorno/reembolso remove o direito associado àquela fatura. O vencimento usa um mês de calendário a partir do débito, ajustando o último dia dos meses curtos.
 
 Falha de rede ao criar assinatura mantém a intenção pendente. O botão Atualizar situação recupera por referência e consulta faturas paginadas (até 100 por atualização). Não se cria nova assinatura enquanto o resultado anterior for incerto. Troca de plano nesta versão exige cancelamento e fim do período pago; não há rateio, migração automática nem pacote adicional cobrado.
+Uma contratação pendente sem período pago pode ser cancelada pelo proprietário no Compasso. A API confirma que ela continua pendente no Mercado Pago, envia o cancelamento e lê novamente o estado antes de liberar outra escolha. Falhas de comunicação mantêm a tentativa bloqueada até nova conferência.
 
 ## Homologação antes de ativar para lojas
 

@@ -30,6 +30,9 @@ export class PaymentsController {
   @Post('subscription/refresh') refresh(@Req() request: AuthRequest) {
     return this.service.refreshSubscription(request.actor);
   }
+  @Post('subscription/cancel-pending') cancelPending(@Req() request: AuthRequest) {
+    return this.service.billing.cancelPending(request.actor);
+  }
   @Post('subscription/extras') extras(@Req() request: AuthRequest, @Body() body: unknown) {
     return this.service.billing.changeExtras(request.actor, body);
   }
