@@ -50,3 +50,17 @@ Os gráficos recebem somente o histórico já autorizado do solicitante. A funç
 - A produção monetária é mantida separada de recebimento. O campo histórico `returningClients` continua contando repetições dentro da janela para compatibilidade; os gráficos novos usam `recurringClients`, que considera o histórico anterior também.
 
 Testes adicionais verificam clientes repetidos, histórico anterior, exclusão de cancelamentos/compromissos/futuro, grupos vazios e deduplicação semanal/mensal. O teste de acesso por funcionário cobre também as novas distribuições.
+
+## Empresa e Solo com o mesmo login
+
+O proprietário pode ter um espaço de empresa e um Solo vinculados à mesma identidade autenticada. No seletor Trocar de espaço, pode criar a modalidade que falta e alternar sem sair. Cada espaço tem seu tenant, serviços, contatos, preferências, assinatura e período de teste. Criar o espaço não chama o provedor nem contrata plano.
+
+GET auth/workspaces lista apenas espaços ativos com papel administrativo e vínculo de proprietário. POST auth/workspaces cria a outra modalidade com schema estrito, chave idempotente e credenciais copiadas do proprietário autenticado. POST auth/workspaces/switch só emite sessão para um vínculo existente da mesma identidade; não cria associação por slug ou e-mail. Contatos, clientes e funcionários não ganham esse acesso. Cadastros antigos com o mesmo e-mail e identidades diferentes não são fundidos automaticamente.
+
+A criação é atômica, admite um espaço por modalidade (também considerando espaços desativados) e repetições com a mesma intenção retornam o mesmo espaço. Herda vínculo Google comprovado, quando existente. Login/senha preserva a seleção de espaço após verificar credenciais. Recuperação de senha inclui espaços da mesma identidade criados depois da emissão do link e invalida suas sessões antigas.
+
+O teste grátis passa a ser controlado por e-mail e modalidade. A migração lê a marcação antiga para preservar o teste já consumido naquela modalidade. O segundo produto pode iniciar seu próprio teste de 14 dias; não renova o teste do primeiro. Dados de assinatura existentes não são alterados.
+
+Para abas desatualizadas, X-Compasso-Workspace informa o tenant renderizado; a API compara com a identidade autenticada e rejeita divergência com 409 antes de ler/gravar. O header não concede acesso, nem substitui a autorização. auth/me permite descobrir o espaço atual para atualizar a interface. A troca emite nova sessão, mantendo o modelo de validade/expiração das sessões anteriores.
+
+Testes cobrem as duas ordens de criação, isolamento, idempotência, duplicidade/inatividade, ataque por e-mail/ID/role, trial legado, assinaturas independentes, vínculo Google e recuperação de senha anterior à criação. A suíte HTTP cobre também abas desatualizadas e ausência de efeitos laterais após rejeição. Testes locais não comprovam renovação real do provedor.

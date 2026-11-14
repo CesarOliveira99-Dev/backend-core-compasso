@@ -60,6 +60,9 @@ const guard: CanActivate = {
       throw new UnauthorizedException('Entre para continuar.');
     request.actor = identity.authenticate(authorization.slice(7));
     const httpRequest = execution.switchToHttp().getRequest<{ path: string; method: string }>();
+    const expectedWorkspace = request.headers['x-compasso-workspace'];
+    if (expectedWorkspace && expectedWorkspace !== request.actor.tenantId && httpRequest.path !== '/v1/auth/me')
+      throw new HttpException('O espaço mudou em outra aba. Atualize a página antes de continuar.', 409);
     if (request.actor.storeSelected === false) {
       const path = httpRequest.path.replace(/^\/v1\//, '');
       const allowed =
