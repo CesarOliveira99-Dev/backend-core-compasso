@@ -208,7 +208,7 @@ export class SubscriptionBilling {
       const checked = await this.preapproval(current.id);
       if (checked.status === 'cancelled') return this.status(actor);
       if (checked.status !== 'pending') throw new ConflictException('A assinatura mudou no Mercado Pago. Atualize a situação antes de cancelar.');
-      await this.call('/preapproval/' + encodeURIComponent(current.id), this.token(), { status: 'canceled' }, undefined, 'PUT');
+      await this.call('/preapproval/' + encodeURIComponent(current.id), this.token(), { status: 'cancelled' }, undefined, 'PUT');
       const cancelled = await this.preapproval(current.id);
       if (cancelled.status !== 'cancelled') throw new ConflictException('O cancelamento ainda não foi confirmado no Mercado Pago. Atualize a situação.');
       return this.status(actor);
