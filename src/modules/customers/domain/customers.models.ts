@@ -1,5 +1,7 @@
 import type { Actor } from '../../../core/domain/models.js';
 export interface Customer extends Actor {
+  internal?: boolean;
+  systemContact?: boolean;
   passwordHash: string;
   addresses: Address[];
 }

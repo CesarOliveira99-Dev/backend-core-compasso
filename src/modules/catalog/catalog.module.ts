@@ -1,7 +1,9 @@
+import { MediaModule } from '../media/media.module.js';
 import { Module } from '@nestjs/common';
 import { CatalogService } from './application/catalog-service.js';
 import { CatalogController } from './infrastructure/controller/catalog.controller.js';
 @Module({
+  imports: [MediaModule],
   controllers: [CatalogController],
   providers: [CatalogService],
   exports: [CatalogService],
