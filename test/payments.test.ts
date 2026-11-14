@@ -25,6 +25,21 @@ const actor = {
   email: 'owner@test.local',
   phone: '5511999999999',
 };
+test('subscription update rejection logs a safe provider reason without exposing personal data', async t => {
+  const service = new PaymentsService(new Context(new DocumentRepository()));
+  const warnings: unknown[][] = [];
+  t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args); });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(
+    { message: 'Invalid status transition', cause: [{ message: 'payer owner@test.local' }] },
+    { status: 400, headers: { 'x-request-id': 'request-123' } },
+  ));
+  await assert.rejects(() => service.call('/preapproval/sub', 'test-token', { status: 'canceled' }, undefined, 'PUT'),
+    /HTTP 400/);
+  assert.deepEqual(warnings[0]?.[1], {
+    status: 400, code: null, message: null, fields: ['message', 'cause'], requestId: 'request-123',
+  });
+  assert.ok(!JSON.stringify(warnings).includes('owner@test.local'));
+});
 test('payment secrets are encrypted and tampering fails; webhook requires valid recent signature', () => {
   const secret = { access_token: 'private-token' };
   const sealed = encrypt(secret);
@@ -160,3 +175,4 @@ test('OAuth uses random state and PKCE; state cannot be replayed', async (t) => 
   assert.ok(!JSON.stringify(service.status(actor)).includes('refresh'));
   await assert.rejects(() => service.callback(state, 'code'));
 });
+
