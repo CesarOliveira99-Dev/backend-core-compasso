@@ -251,7 +251,7 @@ export class PaymentsService {
     } catch {
       throw new ServiceUnavailableException('Mercado Pago indisponível. Tente novamente.');
     }
-    if (response.status >= 400 && response.status < 500 && method === 'PUT') {
+    if (response.status >= 400 && response.status < 500) {
       const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
       const causes = Array.isArray(payload?.cause) ? payload.cause : [];
       const firstCause = causes[0] && typeof causes[0] === 'object' ? causes[0] as Record<string, unknown> : null;
@@ -264,8 +264,11 @@ export class PaymentsService {
       const fields = payload && typeof payload === 'object' && !Array.isArray(payload)
         ? Object.keys(payload).filter(key => /^[a-zA-Z_]{1,32}$/.test(key)).slice(0,10) : [];
       console.warn('Mercado Pago rejected subscription update', {
-        status: response.status, code, message, fields, requestId: response.headers.get('x-request-id'),
+        status: response.status, code, message, fields, method: method || (body ? 'POST' : 'GET'),
+        resource: path.split('?')[0].split('/').filter(Boolean)[0], requestId: response.headers.get('x-request-id'),
       });
+      if (method !== 'PUT') throw new ServiceUnavailableException(
+        `O Mercado Pago recusou a consulta (HTTP ${response.status}${code ? `, código ${code}` : ''}). Atualize a situação antes de tentar novamente.`);
       throw new PaymentProviderRejected(`O Mercado Pago recusou a alteração (HTTP ${response.status}${code ? `, código ${code}` : ''}). Confira a situação antes de tentar novamente.`);
     }
     if (!response.ok)
