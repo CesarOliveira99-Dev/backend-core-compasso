@@ -252,11 +252,20 @@ export class PaymentsService {
       throw new ServiceUnavailableException('Mercado Pago indisponível. Tente novamente.');
     }
     if (response.status >= 400 && response.status < 500 && method === 'PUT') {
-      const payload = await response.json().catch(() => null) as { error?: unknown; cause?: { code?: unknown }[] } | null;
-      const candidate = payload?.cause?.[0]?.code ?? payload?.error;
+      const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+      const causes = Array.isArray(payload?.cause) ? payload.cause : [];
+      const firstCause = causes[0] && typeof causes[0] === 'object' ? causes[0] as Record<string, unknown> : null;
+      const candidate = firstCause?.code ?? payload?.error;
       const code = (typeof candidate === 'string' || typeof candidate === 'number') && /^[a-zA-Z0-9_-]{1,64}$/.test(String(candidate))
         ? String(candidate) : null;
-      console.warn('Mercado Pago rejected subscription update', { status: response.status, code, requestId: response.headers.get('x-request-id') });
+      const rawMessage = firstCause?.message ?? payload?.message;
+      const message = typeof rawMessage === 'string' && /^[\p{L} .,;:()_-]{1,160}$/u.test(rawMessage)
+        ? rawMessage : null;
+      const fields = payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? Object.keys(payload).filter(key => /^[a-zA-Z_]{1,32}$/.test(key)).slice(0,10) : [];
+      console.warn('Mercado Pago rejected subscription update', {
+        status: response.status, code, message, fields, requestId: response.headers.get('x-request-id'),
+      });
       throw new PaymentProviderRejected(`O Mercado Pago recusou a alteração (HTTP ${response.status}${code ? `, código ${code}` : ''}). Confira a situação antes de tentar novamente.`);
     }
     if (!response.ok)
@@ -266,3 +275,4 @@ export class PaymentsService {
     return (await response.json()) as T;
   }
 }
+
