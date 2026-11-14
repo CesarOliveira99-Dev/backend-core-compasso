@@ -88,13 +88,15 @@ export class AppointmentsService {
     professionalId: string,
     ignoreId?: string,
   ) {
-    return this.context.repository
+    const bookings = this.context.repository
       .list<Appointment>(actor.tenantId, "appointments")
       .filter(
         (appointment) =>
           appointment.id !== ignoreId &&
           (appointment.professionalId || "principal") === professionalId,
       );
+    const blocks = this.context.repository.list<{ professionalId: string; startsAt: string; endsAt: string; active: boolean }>(actor.tenantId, "agenda_blocks").filter(b=>b.active && b.professionalId===professionalId).map(b=>({...b,status:"confirmed" as const}));
+    return [...bookings, ...blocks];
   }
   private servicePrice(actor: Actor, item: CatalogItem, startsAt: string) {
     const percent = Math.max(

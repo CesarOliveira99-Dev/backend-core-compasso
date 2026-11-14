@@ -45,3 +45,10 @@ export function assertWorkspaceRoute(
       "Este recurso não faz parte da agenda individual.",
     );
 }
+/** Additional staff routes remain narrow; booking for other people stays administrator-only. */
+export function employeeCareRoute(path:string,method:string) {
+ if(method==='GET')return /^workspace\/care\/(template|returns|blocks|customers\/[\w-]+|waitlist(?:\/[\w-]+\/slots)?)$/.test(path);
+ if(method==='PUT')return /^workspace\/care\/(template|returns|blocks\/[\w-]+|waitlist\/[\w-]+)$/.test(path);
+ if(method==='POST')return /^workspace\/care\/(blocks|waitlist|appointments\/[\w-]+\/(reminder|missed))$/.test(path);
+ return false;
+}

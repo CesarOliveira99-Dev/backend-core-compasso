@@ -1,5 +1,6 @@
 export type AppointmentStatus = 'pending' | 'confirmed' | 'completed' | 'cancelled';
 export interface Appointment {
+  attendanceOutcome?: "no_show";
   categoryId?: string;
   categoryName?: string;
   categoryColor?: string;

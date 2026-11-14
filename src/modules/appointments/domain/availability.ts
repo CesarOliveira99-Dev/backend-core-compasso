@@ -9,7 +9,7 @@ export function validCalendarDate(value: string) {
   );
 }
 // Resolve a local wall-clock time through Intl, including days whose UTC offset changes.
-function localTimestamp(date: string, minutes: number, timezone: string) {
+export function localTimestamp(date: string, minutes: number, timezone: string) {
   const target = Date.parse(`${date}T00:00:00Z`) + minutes * 60000;
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
@@ -108,7 +108,7 @@ export function slotIssue(
   start: number,
   end: number,
   window: ScheduleWindow | undefined,
-  reservations: Appointment[],
+  reservations: Pick<Appointment, "startsAt" | "endsAt" | "status">[],
   now: number,
 ): "past" | "hours" | "busy" | undefined {
   if (
@@ -141,7 +141,7 @@ export function slotIssue(
 export function freeSlots(
   window: ScheduleWindow | undefined,
   durationMinutes: number,
-  reservations: Appointment[],
+  reservations: Pick<Appointment, "startsAt" | "endsAt" | "status">[],
   timezone: string,
   now = Date.now(),
 ) {

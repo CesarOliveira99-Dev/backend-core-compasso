@@ -365,7 +365,7 @@ export class WorkspaceService {
       return d >= firstDate && d <= today;
     });
     const completed = items.filter((a) => a.status === "completed"),
-      cancelled = items.filter((a) => a.status === "cancelled");
+      cancelled = items.filter((a) => a.status === "cancelled" && a.attendanceOutcome !== "no_show");
     const clients = new Map<string, number>();
     completed
       .filter(
@@ -403,7 +403,20 @@ export class WorkspaceService {
         completed: list.filter((a) => a.status === "completed").length,
       };
     });
+    const previousStart = new Date(`${firstDate}T12:00:00Z`);
+    previousStart.setUTCDate(previousStart.getUTCDate() - days);
+    const previousCompleted = history.filter(a => a.status === "completed" && localDate(a.startsAt) >= previousStart.toISOString().slice(0,10) && localDate(a.startsAt) < firstDate);
+    const previousProductionCents = previousCompleted.reduce((sum,a)=>sum+a.priceCents,0);
+    const productionCents = completed.reduce((sum,a)=>sum+a.priceCents,0);
+    const serviceProduction = new Map<string,{id:string;name:string;count:number;amountCents:number}>();
+    for (const appointment of completed) {
+      if (this.repo.get<Customer>(actor.tenantId,"customers",appointment.customerId)?.systemContact) continue;
+      const row = serviceProduction.get(appointment.itemId) || {id:appointment.itemId,name:appointment.itemName,count:0,amountCents:0};
+      row.count++; row.amountCents += appointment.priceCents; serviceProduction.set(row.id,row);
+    }
     return {
+      comparison: {previousCompleted:previousCompleted.length,previousProductionCents,productionChangePercent:previousProductionCents ? Math.round((productionCents-previousProductionCents)/previousProductionCents*1000)/10 : null},
+      serviceProduction: [...serviceProduction.values()].sort((a,b)=>b.amountCents-a.amountCents || a.name.localeCompare(b.name)),
       ...agendaCharts(
         history,
         new Set(
@@ -422,6 +435,7 @@ export class WorkspaceService {
       total: items.length,
       completed: completed.length,
       cancelled: cancelled.length,
+      missed: items.filter(a=>a.attendanceOutcome === "no_show").length,
       productionCents: completed.reduce((sum, a) => sum + a.priceCents, 0),
       clients: clients.size,
       returningClients: [...clients.values()].filter((count) => count > 1)
@@ -463,7 +477,7 @@ export class WorkspaceService {
           a.customerName,
           a.itemName,
           a.categoryName || "",
-          a.status,
+          a.attendanceOutcome === "no_show" ? "no_show" : a.status,
           a.paymentStatus,
           (a.priceCents / 100).toFixed(2),
         ]),

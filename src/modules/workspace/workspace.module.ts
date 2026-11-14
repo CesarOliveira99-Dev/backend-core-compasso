@@ -1,3 +1,6 @@
+import { AppointmentsModule } from "../appointments/appointments.module.js";
+import { ClientCareService } from "./application/client-care-service.js";
+import { ClientCareController } from "./client-care.controller.js";
 import {
   Body,
   Controller,
@@ -87,8 +90,9 @@ class WorkspaceController {
   }
 }
 @Module({
-  controllers: [WorkspaceController],
-  providers: [WorkspaceService],
+  imports: [AppointmentsModule],
+  controllers: [WorkspaceController, ClientCareController],
+  providers: [WorkspaceService, ClientCareService],
   exports: [WorkspaceService],
 })
 export class WorkspaceModule {}

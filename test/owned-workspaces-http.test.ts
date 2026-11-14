@@ -249,3 +249,20 @@ test('Solo HTTP accepts per-appointment duration, exposes late slots and validat
  const booked=await request('appointments',account.token,'POST',{itemId:'solo-personal',customerId:'solo-self',startsAt:new Date(date+'T23:45:00-03:00').toISOString(),durationMinutes:90,idempotencyKey:randomUUID()});assert.equal(booked.status,201,JSON.stringify(booked.data));assert.equal(Date.parse(booked.data.endsAt)-Date.parse(booked.data.startsAt),90*60000);
  assert.equal((await request('insights/wallet?from=2020-01-01&to=2020-01-02',account.token)).data.periodEnd,'2020-01-02');assert.equal((await request('insights/wallet?from=2020-02-31&to=2020-03-02',account.token)).status,400);
 });
+test('care HTTP preserves authentication, private spaces, preview validation and booking conflicts',async()=>{
+ const register=async()=>request('auth/register','','POST',{role:'admin',workspaceMode:'solo',name:'Pessoa dos Cuidados',phone:'11999991234',email:randomUUID()+'@test.local',password:'StrongPassword123',confirmPassword:'StrongPassword123'});
+ const owner=(await register()).data,other=(await register()).data;
+ assert.equal((await request('workspace/care/template')).status,401);
+ const bootstrap={catalog:(await request('catalog',owner.token)).data};
+ const customer=(await request('workspace/contacts',owner.token,'POST',{idempotencyKey:randomUUID(),name:'Contato HTTP',phone:'11999991234'})).data;
+ const startsAt=new Date(Date.now()+4*86400000).toISOString(),endsAt=new Date(Date.parse(startsAt)+3600000).toISOString();
+ const booking=await request('appointments',owner.token,'POST',{itemId:bootstrap.catalog[0].id,customerId:customer.id,professionalId:'principal',startsAt});assert.equal(booking.status,201);
+ const preview=await request(`workspace/care/appointments/${booking.data.id}/reminder`,owner.token,'POST',{});assert.equal(preview.status,201);assert.equal(preview.data.automatic,false);assert.match(preview.data.message,/Contato HTTP/);
+ assert.equal((await request(`workspace/care/appointments/${booking.data.id}/reminder`,owner.token,'POST',{template:'{senha}'})).status,400);
+ assert.equal((await request(`workspace/care/appointments/${booking.data.id}/reminder`,other.token,'POST',{})).status,403);
+ assert.equal((await request(`workspace/care/customers/${customer.id}`,other.token)).status,404);
+ assert.equal((await request('workspace/care/blocks',owner.token,'POST',{idempotencyKey:randomUUID(),professionalId:'principal',title:'Conflito',startsAt,endsAt})).status,409);
+ assert.equal((await request(`workspace/care/appointments/${booking.data.id}/missed`,owner.token,'POST',{})).status,400);
+ assert.equal((await request('workspace/care/returns',owner.token,'PUT',{customerId:customer.id,itemId:bootstrap.catalog[0].id,professionalId:'principal',intervalDays:30,revision:0})).status,200);
+ assert.equal((await request('workspace/care/returns',other.token)).data.length,0);
+});

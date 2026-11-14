@@ -266,6 +266,17 @@ test("staff tools are scoped through HTTP and private style never appears in cus
     startsAt: date.toISOString(),
   });
   assert.equal(booking.status, 201, JSON.stringify(booking.data));
+  assert.equal((await request('workspace/care/template',employee.token)).status,200);
+  assert.equal((await request('workspace/care/template',employee.token,'PUT',{revision:0,templates:[{id:'staff',title:'Lembrete pessoal',message:'Olá {nome}, {data} às {horario}.'}]})).status,200);
+  assert.equal((await request(`workspace/care/appointments/${booking.data.id}/reminder`,employee.token,'POST',{templateId:'staff'})).status,201);
+  assert.equal((await request(`workspace/care/customers/${client.user.id}`,employee.token)).status,200);
+  assert.equal((await request(`workspace/care/customers/${another.user.id}`,employee.token)).status,403);
+  assert.equal((await request('workspace/care/returns',employee.token,'PUT',{customerId:client.user.id,itemId:item.id,professionalId:employee.user.professionalId,intervalDays:30,revision:0})).status,200);
+  assert.equal((await request('workspace/care/returns',employee.token,'PUT',{customerId:client.user.id,itemId:item.id,professionalId:'principal',intervalDays:30,revision:0})).status,403);
+  assert.equal((await request('workspace/care/waitlist',employee.token)).status,200);
+  assert.equal((await request('workspace/care/blocks',employee.token)).status,200);
+  assert.equal((await request('workspace/care/series',employee.token,'POST',{})).status,403);
+  assert.equal((await request('workspace/care/waitlist/example/book',employee.token,'POST',{})).status,403);
   const list = await request("workspace/customers", employee.token);
   assert.deepEqual(
     list.data.map((c: any) => c.id),
