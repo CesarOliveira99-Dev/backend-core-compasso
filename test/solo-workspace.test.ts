@@ -479,10 +479,16 @@ test("Solo annual payment uses 12-month billing, grants a calendar year only aft
   }) as any);
   await assert.rejects(() => billing.subscribe(f.owner, { planId: "equipe" }));
   assert.equal(calls.length, 0);
+  await assert.rejects(() => billing.subscribe(f.owner, { planId: "solo-anual" }), /terminar o teste grátis/);
+  assert.equal(calls.length, 0);
+  f.repo.put(f.owner.tenantId, "billing", "trial", {
+    startedAt: Date.now() - 15 * 86400000,
+    endsAt: Date.now() - 1,
+  });
   await billing.subscribe(f.owner, { planId: "solo-anual" });
   assert.equal(calls[0].body.auto_recurring.frequency, 12);
   assert.equal(calls[0].body.auto_recurring.transaction_amount, 110);
-  assert.equal(storeEntitlement(f.repo, f.owner.tenantId).mode, "trial");
+  assert.equal(storeEntitlement(f.repo, f.owner.tenantId).mode, "expired");
   frequency = 1;
   await assert.rejects(() => billing.preapproval("subsolo"));
   frequency = 12;

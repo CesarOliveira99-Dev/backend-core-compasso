@@ -64,6 +64,8 @@ export class SubscriptionBilling {
     if (solo !== planId.startsWith('solo-')) throw new ForbiddenException('Plano incompatível com a modalidade da conta.');
     const priceCents = planPrice(planId, extraEmployees);
     if (!this.enabled()) throw new ServiceUnavailableException('A contratação dos planos ainda não foi ativada.');
+    if (storeEntitlement(this.repo, actor.tenantId).mode === 'trial')
+      throw new ConflictException('A contratação ficará disponível ao terminar o teste grátis. Nenhuma cobrança será iniciada durante o teste.');
     const plan = findPlan(planId)!;
     const periodMonths = 'periodMonths' in plan ? plan.periodMonths : 1;
     if (employeeSeats(this.repo, actor.tenantId) > plan.employees + extraEmployees)
@@ -95,12 +97,10 @@ export class SubscriptionBilling {
         this.repo.put(scope, 'billing_references', setup.reference, setup);
       });
       // Never recreate a pending setup after a transport failure. Recover by reference instead.
-      const access = storeEntitlement(this.repo, actor.tenantId);
       const result = await this.call<unknown>('/preapproval', this.token(), {
         reason: `Compasso ${plan.name} — assinatura ${periodMonths === 12 ? 'anual' : 'mensal'}`, external_reference: setup.reference,
         payer_email: actor.email, back_url: app.toString(),
-        auto_recurring: { frequency: periodMonths, frequency_type: 'months', transaction_amount: priceCents / 100, currency_id: 'BRL',
-          ...(access.mode === 'trial' ? { start_date: new Date(access.expiresAt).toISOString() } : {}) },
+        auto_recurring: { frequency: periodMonths, frequency_type: 'months', transaction_amount: priceCents / 100, currency_id: 'BRL' },
         status: 'pending',
       }, key);
       const record = this.savePreapproval(result, setup.reference);
@@ -196,6 +196,25 @@ export class SubscriptionBilling {
     const raw = await this.call<{ id: string }>('/preapproval/' + encodeURIComponent(id), this.token());
     if (raw.id !== id) throw new ForbiddenException('Assinatura incompatível.');
     return this.savePreapproval(raw);
+  }
+  async cancelPending(actor: Actor) {
+    this.context.admin(actor);
+    if (this.creating.has(actor.tenantId)) throw new ConflictException('Aguarde a operação anterior terminar.');
+    this.creating.add(actor.tenantId);
+    try {
+      const current = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
+      if (!current || current.status !== 'pending' || (current.paidThrough || 0) > Date.now())
+        throw new ConflictException('Somente uma contratação pendente e sem período pago pode ser cancelada aqui.');
+      if (this.repo.list<{ subscriptionId: string }>(actor.tenantId, 'subscription_invoices').some(invoice => invoice.subscriptionId === current.id))
+        throw new ConflictException('Há uma fatura vinculada. Atualize a situação antes de cancelar.');
+      const checked = await this.preapproval(current.id);
+      if (checked.status === 'cancelled') return this.status(actor);
+      if (checked.status !== 'pending') throw new ConflictException('A assinatura mudou no Mercado Pago. Atualize a situação antes de cancelar.');
+      await this.call('/preapproval/' + encodeURIComponent(current.id), this.token(), { status: 'canceled' }, undefined, 'PUT');
+      const cancelled = await this.preapproval(current.id);
+      if (cancelled.status !== 'cancelled') throw new ConflictException('O cancelamento ainda não foi confirmado no Mercado Pago. Atualize a situação.');
+      return this.status(actor);
+    } finally { this.creating.delete(actor.tenantId); }
   }
   async refresh(actor: Actor) {
     this.context.admin(actor);
