@@ -249,7 +249,7 @@ export class PaymentsService {
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch {
-      throw new ServiceUnavailableException('Mercado Pago indisponível. Tente novamente.');
+      throw new ServiceUnavailableException('Não foi possível confirmar a operação. Atualize a situação antes de tentar novamente.');
     }
     if (response.status >= 400 && response.status < 500) {
       const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
@@ -268,12 +268,12 @@ export class PaymentsService {
         resource: path.split('?')[0].split('/').filter(Boolean)[0], requestId: response.headers.get('x-request-id'),
       });
       if (method !== 'PUT') throw new ServiceUnavailableException(
-        `O Mercado Pago recusou a consulta (HTTP ${response.status}${code ? `, código ${code}` : ''}). Atualize a situação antes de tentar novamente.`);
-      throw new PaymentProviderRejected(`O Mercado Pago recusou a alteração (HTTP ${response.status}${code ? `, código ${code}` : ''}). Confira a situação antes de tentar novamente.`);
+        'Não foi possível consultar seu pagamento agora. Tente atualizar a situação em alguns instantes.');
+      throw new PaymentProviderRejected('Não foi possível concluir a alteração. Atualize a situação e, se o problema continuar, entre em contato com o suporte.');
     }
     if (!response.ok)
       throw new ServiceUnavailableException(
-        'Não foi possível concluir no Mercado Pago. Confira a configuração e tente novamente.',
+        'Não foi possível confirmar a operação. Atualize a situação antes de tentar novamente.',
       );
     return (await response.json()) as T;
   }
