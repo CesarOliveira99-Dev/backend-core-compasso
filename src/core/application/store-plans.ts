@@ -82,6 +82,7 @@ export interface StoreSubscription {
   status: string;
   externalReference: string;
   paidThrough?: number;
+  renewalFailureAt?: number;
   checkedAt?: string;
   extraEmployees?: number;
   periodMonths?: number;
@@ -146,7 +147,12 @@ export function storeEntitlement(
     "subscription",
   );
   const plan = subscription?.planId && findPlan(subscription.planId);
-  if (plan && (subscription.paidThrough || 0) > now)
+  const paidThrough = subscription?.paidThrough || 0;
+  const graceEndsAt = paidThrough > 0 && subscription?.renewalFailureAt !== undefined &&
+    subscription.renewalFailureAt >= paidThrough - 60000 &&
+    ['authorized', 'paused'].includes(subscription.status)
+    ? paidThrough + 5 * 86400000 : 0;
+  if (plan && Math.max(paidThrough, graceEndsAt) > now)
     return {
       mode: "active" as const,
       plan: {
@@ -154,7 +160,8 @@ export function storeEntitlement(
         employees: plan.employees + (subscription.extraEmployees || 0),
         priceCents: subscription.priceCents,
       },
-      expiresAt: subscription.paidThrough!,
+      expiresAt: Math.max(paidThrough, graceEndsAt),
+      graceEndsAt: graceEndsAt > now && paidThrough <= now ? graceEndsAt : undefined,
       trialEndsAt: trial?.endsAt,
     };
   if (trial && trial.endsAt > now)
@@ -235,3 +242,4 @@ export function requireEmployeeSeat(repo: Repository, tenantId: string) {
     );
   }
 }
+
