@@ -15,6 +15,25 @@ const owner = { id: 'owner', tenantId: 'store', email: 'owner@test.local', name:
 const now = Date.now();
 const paid = (repo: DocumentRepository, planId = 'essencial') => repo.put('store', 'billing', 'subscription', { id: 'sub', planId, paidThrough: now + 86400000 });
 
+test('failed renewal grants exactly five days after paid expiry without extending on repeated failures', () => {
+  const repo = new DocumentRepository();
+  const put = (changes = {}) => repo.put('store', 'billing', 'subscription', {
+    id: 'sub', planId: 'essencial', status: 'authorized', paidThrough: now, renewalFailureAt: now, ...changes,
+  });
+  put();
+  assert.equal(storeEntitlement(repo, 'store', now).graceEndsAt, now + 5 * 86400000);
+  assert.equal(storeEntitlement(repo, 'store', now + 5 * 86400000 - 1).mode, 'active');
+  assert.equal(storeEntitlement(repo, 'store', now + 5 * 86400000).mode, 'expired');
+  put({ renewalFailureAt: now + 2 * 86400000 });
+  assert.equal(storeEntitlement(repo, 'store', now + 2 * 86400000).expiresAt, now + 5 * 86400000);
+  put({ status: 'cancelled' });
+  assert.equal(storeEntitlement(repo, 'store', now).mode, 'expired');
+  put({ paidThrough: 0 });
+  assert.equal(storeEntitlement(repo, 'store', now).mode, 'expired');
+  put({ paidThrough: now + 30 * 86400000 });
+  assert.equal(storeEntitlement(repo, 'store', now).graceEndsAt, undefined);
+});
+
 test('owner registration starts exactly fourteen days; customers have no billing and existing pilot is preserved', () => {
   const repo = new DocumentRepository(), identity = new IdentityService(new Context(repo), new GoogleIdentity());
   const result = identity.register({ ...owner, password: 'StrongPassword123', role: 'admin', businessName: 'New Store',
