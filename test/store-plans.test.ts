@@ -112,7 +112,7 @@ function billingEnv() {
 function fixture() {
   billingEnv(); const repo = new DocumentRepository();
   let external = '', status = 'authorized', paymentStatus = 'approved', collector = 123, amount = 59.9, refunded = 0, live = false;
-  let creates = 0, fail = false;
+  let creates = 0, fail = false, invoiceId = 44, paymentId = 42, debitDate = now;
   const preapproval = () => ({ id: 'sub', collector_id: 123, external_reference: external, status, init_point: status === 'cancelled' ? undefined : 'https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=sub',
     auto_recurring: { transaction_amount: amount, currency_id: 'BRL', frequency: 1, frequency_type: 'months' } });
   const bodies: any[] = [];
@@ -121,8 +121,8 @@ function fixture() {
     if (path.startsWith('/preapproval/search')) return { results: [preapproval()] };
     if (path === '/preapproval/sub') { if (body?.status === 'cancelled') status = 'cancelled'; return preapproval(); }
     if (path.startsWith('/authorized_payments/search')) return { results: [{ id: 44 }] };
-    if (path === '/authorized_payments/44') return { id: 44, preapproval_id: 'sub', currency_id: 'BRL', transaction_amount: '59.90', debit_date: new Date(now).toISOString(), payment: { id: 42 } };
-    if (path === '/v1/payments/42') return { id: 42, collector_id: collector, currency_id: 'BRL', transaction_amount: amount,
+    if (path === `/authorized_payments/${invoiceId}`) return { id: invoiceId, preapproval_id: 'sub', currency_id: 'BRL', transaction_amount: '59.90', debit_date: new Date(debitDate).toISOString(), payment: { id: paymentId } };
+    if (path === `/v1/payments/${paymentId}`) return { id: paymentId, collector_id: collector, currency_id: 'BRL', transaction_amount: amount,
       live_mode: live, status: paymentStatus, transaction_amount_refunded: refunded, date_approved: new Date(now).toISOString() };
     throw new Error(path);
   };
@@ -130,6 +130,7 @@ function fixture() {
   return { repo, service, bodies, creates: () => creates, fail: () => { fail = true; }, mutate: (next: any) => {
     status = next.status ?? status; paymentStatus = next.paymentStatus ?? paymentStatus; collector = next.collector ?? collector;
     amount = next.amount ?? amount; refunded = next.refunded ?? refunded; live = next.live ?? live;
+    invoiceId = next.invoiceId ?? invoiceId; paymentId = next.paymentId ?? paymentId; debitDate = next.debitDate ?? debitDate;
   } };
 }
 
@@ -179,6 +180,39 @@ test('approved invoice activates only its store, duplicates cannot extend period
   f.mutate({ refunded: 59.9, paymentStatus: 'refunded' }); await f.service.payment('42');
   assert.equal(storeEntitlement(f.repo, 'store').mode, 'expired');
   assert.equal(new Date(subscriptionPeriodEnd(Date.parse('2027-01-31T12:00:00Z'))).toISOString(), '2027-02-28T12:00:00.000Z');
+});
+
+test('renewal invoice rejection preserves paid time, grants five days, expires and recovers on approval', async t => {
+  let clock = now;
+  t.mock.method(Date, 'now', () => clock);
+  const f = fixture();
+  await f.service.subscribe(owner, { planId: 'essencial' });
+  await f.service.invoice('44');
+  const expiry = subscriptionPeriodEnd(now);
+  clock = expiry - 1;
+  assert.equal(f.service.status(owner).entitlement.mode, 'active');
+  clock = expiry;
+  f.mutate({ invoiceId: 45, paymentId: 43, debitDate: expiry, paymentStatus: 'rejected' });
+  await f.service.invoice('45');
+  const deadline = expiry + 5 * 86400000;
+  assert.equal(f.service.status(owner).entitlement.graceEndsAt, deadline);
+  assert.equal(f.service.status(owner).subscription?.paidThrough, expiry);
+  assert.doesNotThrow(() => requireStoreService(f.repo, 'store'));
+  clock += 2 * 86400000;
+  await f.service.invoice('45');
+  await f.service.preapproval('sub');
+  assert.equal(f.service.status(owner).entitlement.graceEndsAt, deadline);
+  clock = deadline - 1;
+  assert.doesNotThrow(() => requireStoreService(f.repo, 'store'));
+  clock = deadline;
+  assert.equal(f.service.status(owner).entitlement.mode, 'expired');
+  assert.throws(() => requireStoreService(f.repo, 'store'));
+  f.mutate({ paymentStatus: 'approved' });
+  await f.service.invoice('45');
+  assert.equal(f.service.status(owner).entitlement.mode, 'active');
+  assert.equal(f.service.status(owner).entitlement.graceEndsAt, undefined);
+  assert.equal(f.service.status(owner).subscription?.paidThrough, subscriptionPeriodEnd(expiry));
+  assert.doesNotThrow(() => requireStoreService(f.repo, 'store'));
 });
 
 test('lost creation response is recovered by reference without creating a second subscription', async () => {
