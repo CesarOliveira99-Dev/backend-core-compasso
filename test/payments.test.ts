@@ -34,7 +34,12 @@ test('subscription update rejection logs a safe provider reason without exposing
     { status: 400, headers: { 'x-request-id': 'request-123' } },
   ));
   await assert.rejects(() => service.call('/preapproval/sub', 'test-token', { status: 'canceled' }, undefined, 'PUT'),
-    /HTTP 400/);
+    error => {
+      const message = (error as Error).message;
+      assert.match(message, /Não foi possível concluir a alteração/);
+      assert.doesNotMatch(message, /HTTP|400|Mercado Pago|owner@test/);
+      return true;
+    });
   assert.deepEqual(warnings[0]?.[1], {
     status: 400, code: null, message: null, fields: ['message', 'cause'], method: 'PUT', resource: 'preapproval', requestId: 'request-123',
   });
