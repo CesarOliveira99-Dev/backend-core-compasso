@@ -1,6 +1,8 @@
+import { personNameSchema, phoneSchema } from '../../../core/application/person.schemas.js';
 import { SetMetadata } from '@nestjs/common';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
+import { businessAddressSchema } from '../../settings/application/business-profile.schemas.js';
 import type { Actor } from '../../../core/domain/models.js';
 
 export const Public = () => SetMetadata('public', true);
@@ -19,14 +21,29 @@ export function verifyPassword(password: string, stored: string): boolean {
 export const credentialsSchema = z.object({
   email: z
     .string()
+    .max(254, 'O e-mail deve ter no máximo 254 caracteres.')
     .email()
     .transform((v) => v.toLowerCase()),
   password: z.string().min(8).max(128),
-  slug: z.string().min(2).max(60).default('studio'),
+  slug: z.string().min(2).max(60).optional(),
 });
 export const registrationSchema = credentialsSchema.extend({
-  name: z.string().trim().min(2).max(100),
-  phone: z.string().min(10).max(20),
+  idempotencyKey: z.string().uuid().optional(),
+  name: personNameSchema,
+  phone: phoneSchema,
   role: z.enum(['admin', 'customer']),
-  businessName: z.string().max(100).optional(),
+  workspaceMode: z.enum(['store', 'solo']).default('store'),
+  businessName: z.string().trim().min(2).max(100).optional(),
+  address: businessAddressSchema.optional(),
 });
+export const registrationRequestSchema = registrationSchema
+  .extend({
+    confirmPassword: z
+      .string({ error: 'Confirme sua senha.' })
+      .min(1, 'Confirme sua senha.')
+      .max(128),
+  })
+  .refine((input) => input.password === input.confirmPassword, {
+    message: 'As senhas não coincidem. Digite a mesma senha nos dois campos.',
+    path: ['confirmPassword'],
+  });

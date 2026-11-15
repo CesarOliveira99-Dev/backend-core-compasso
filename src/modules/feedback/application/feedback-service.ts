@@ -1,3 +1,9 @@
+import {
+  recommendationStatus,
+  reviewSummary,
+  verifiedReviews,
+  type RecommendationEntitlement,
+} from '../domain/reputation.js';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { Context, id, parse, timestamp } from '../../../core/application/context.js';
@@ -15,9 +21,50 @@ export class FeedbackService {
       .filter((f) => actor.role === 'admin' || f.customerId === actor.id)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
+  storeReviews(actor: Actor, query: unknown) {
+    const { page } = parse(
+      z.object({ page: z.coerce.number().int().min(1).max(10000).default(1) }),
+      query,
+    );
+    const appointments = this.context.repository.list<Appointment>(actor.tenantId, 'appointments');
+    const reviews = verifiedReviews(
+      this.context.repository.list<Feedback>(actor.tenantId, 'feedback'),
+      appointments,
+    );
+    const summary = reviewSummary(reviews);
+    const published = reviews
+      .filter((review) => review.published === true)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const byId = new Map(appointments.map((appointment) => [appointment.id, appointment]));
+    return {
+      summary,
+      recommendation: recommendationStatus(
+        summary,
+        this.context.repository.get<RecommendationEntitlement>(
+          actor.tenantId,
+          'platform_entitlements',
+          'recommendation',
+        ),
+      ),
+      reviews: published.slice((page - 1) * 6, page * 6).map((review) => ({
+        id: review.id,
+        customerName: review.customerName.trim().split(/\s+/)[0] || 'Cliente',
+        rating: review.rating,
+        comment: review.comment,
+        reply: review.reply,
+        createdAt: review.createdAt,
+        serviceName: byId.get(review.appointmentId)?.itemName || 'Atendimento',
+        verified: true,
+      })),
+      page,
+      totalPages: Math.max(1, Math.ceil(published.length / 6)),
+      publicCount: published.length,
+    };
+  }
   create(actor: Actor, body: unknown) {
     const input = parse(
       z.object({
+        published: z.boolean().default(false),
         appointmentId: z.string(),
         rating: z.number().int().min(1).max(5),
         comment: z.string().trim().min(3).max(2000),

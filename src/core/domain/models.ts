@@ -1,5 +1,10 @@
-export type Role = 'admin' | 'customer';
+export type Role = 'admin' | 'customer' | 'employee';
 export interface Actor {
+  storeSelected?: boolean;
+  identityId?: string;
+  professionalId?: string;
+  active?: boolean;
+  emailVerified?: boolean;
   id: string;
   tenantId: string;
   role: Role;

@@ -17,7 +17,12 @@ export class DocumentRepository implements Repository {
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS documents_by_customer ON documents(tenant_id, collection, json_extract(payload, '$.customerId')); CREATE INDEX IF NOT EXISTS documents_by_user ON documents(tenant_id, collection, json_extract(payload, '$.userId'));",
     );
+    for (const field of ['identityId', 'professionalId']) this.db.exec(`CREATE INDEX IF NOT EXISTS documents_by_${field} ON documents(tenant_id, collection, json_extract(payload, '$.${field}'))`);
   }
+  cleanupExpired() {
+    this.db.prepare("DELETE FROM documents WHERE tenant_id IN ('system','__compasso_payments__') AND collection IN ('google_challenges','google_enrollments','sessions','registration_keys','account_tickets','team_invites','oauth_states') AND json_extract(payload,'$.expiresAt') <= ?").run(Date.now());
+  }
+  healthy() { return this.db.prepare('SELECT 1 AS ok').get()?.ok===1; }
   list<T>(tenantId: string, collection: string, query: DocumentQuery = {}): T[] {
     let sql = 'SELECT payload FROM documents WHERE tenant_id=? AND collection=?';
     const parameters = [tenantId, collection];
@@ -28,6 +33,9 @@ export class DocumentRepository implements Repository {
     if (query.userId) {
       sql += " AND json_extract(payload, '$.userId')=?";
       parameters.push(query.userId);
+    }
+    for (const field of ['identityId', 'professionalId'] as const) {
+      if (query[field]) { sql += ` AND json_extract(payload, '$.${field}')=?`; parameters.push(query[field]!); }
     }
     return this.db
       .prepare(sql)

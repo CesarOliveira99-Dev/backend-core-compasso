@@ -1,62 +1,29 @@
-# Compasso Backend
+# Compasso — API
 
-API modular de cadastro, agenda, triagem, pedidos e relacionamento do Compasso. Este repositório é independente do [frontend e BFF](https://github.com/CesarOliveira99-Dev/front-compasso-web).
+Atualização de 07/11/2026 a partir da versão local integrada. Este repositório é independente: código da aplicação na raiz, dependências e lockfile próprios. O outro serviço fica em https://github.com/CesarOliveira99-Dev/front-compasso-web.
 
-## Executar
+## Executar e validar
 
-Requisitos: Node.js 24 e pnpm 11.
+Requisitos: Node.js 24 e pnpm 11.25.0.
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm demo
-```
-
-A API inicia em `http://127.0.0.1:4000/v1`. O comando `pnpm demo` cria dados fictícios somente se a loja de demonstração ainda não existir. Para iniciar sem criar a demonstração, use `pnpm dev`. Os dois comandos carregam `.env` quando presente; use `.env.example` como referência.
-
-| Conta fictícia | E-mail | Senha | Código da loja |
-| --- | --- | --- | --- |
-| Administrador | admin@compasso.local | Compasso@2026 | studio |
-| Cliente | cliente@compasso.local | Compasso@2026 | studio |
-
-Não há cobrança real nem mensagens externas. O seed de demonstração é recusado em modo de produção. Uma instalação real deve usar uma base nova, sem contas fictícias.
-
-## Verificação e execução compilada
-
-```sh
-pnpm typecheck
 pnpm test
+pnpm typecheck
 pnpm build
 pnpm start
 ```
 
-Os testes usam SQLite em memória e uma instância isolada na porta 4107. Não acessam o banco da demonstração.
+Para desenvolvimento: `pnpm dev`. `pnpm demo` cria dados fictícios apenas fora de produção. Sem esse comando, dados existentes são preservados e não é criada demonstração.
 
-## Arquitetura
+## Render
 
-```text
-src/
-  core/
-    domain/                     contratos e políticas compartilhados
-    application/                contexto de aplicação e autorização
-    infrastructure/             persistência e seed local
-  modules/
-    <module>/
-      domain/                   modelos do módulo
-      application/              operações e validação
-      infrastructure/controller/ adaptadores HTTP
-      <module>.module.ts        composição e interface pública
-```
+Crie um Web Service Docker ligado a este repositório. Root Directory vazio; Dockerfile `./Dockerfile`; contexto raiz. Health check `/v1/health`; disco persistente em `/data`; uma instância; SEED_DEMO=false. Banco /data/compasso.sqlite e mídia /data/media. Configure APP_URL para o frontend HTTPS e PUBLIC_API_URL para a API HTTPS com /v1.
 
-Módulos implementados: identidade, clientes, catálogo, agenda, checkout, triagem, avaliações, fidelidade, campanhas, notificações, configurações e indicadores. O banco SQLite persistente fica em `.data/compasso.sqlite`; o caminho pode ser alterado por `DATABASE_PATH`. Os dados são separados por loja, e operações críticas de checkout são transacionais e idempotentes.
+Use criação manual de serviço ou Blueprint `render.yaml`, nunca ambos para o mesmo serviço. Starter é uma referência inicial para piloto, sujeito a testes de memória/carga. O disco inicial de 1 GB não comporta 50 lojas com 200 MB cada. O disco não substitui backups externos com restauração testada.
 
-Os controllers delegam aos serviços de aplicação. O adapter de repositório pode ser substituído sem dar ao frontend acesso à persistência. O backend é a autoridade para preços, permissões, disponibilidade e estados.
+## Integrações e limites
 
-## Integração com o frontend
+Segredos ficam no painel do backend, fora do repositório. Resend: RESEND_API_KEY, MAIL_FROM e APP_URL HTTPS; confirmar DNS e testar entrega real. Google: GOOGLE_CLIENT_ID e origens autorizadas. Mercado Pago: credenciais, criptografia e webhook conforme a integração; manter mensalidade e adicional com preço zero até homologação. Backup: node scripts/backup.mjs backup PASTA_NOVA com DATABASE_PATH e MEDIA_PATH configurados; copiar o resultado para destino externo e testar restauração isolada.
 
-Configure `BACKEND_URL=http://127.0.0.1:4000/v1` no ambiente do projeto web. O BFF usa `/auth/login` e encaminha o token de sessão nas chamadas autenticadas. Não existe dependência de código ou de diretórios do outro repositório.
-
-## Limites atuais
-
-Gateway de pagamento e WhatsApp Business estão desativados por decisão do projeto. Seus contratos de integração existem, mas não há webhook ou envio externo ativo. Pagamentos são registrados manualmente e notificações são internas.
-
-Esta é uma base funcional local, sem homologação de carga ou múltiplas instâncias. O worker de lembretes depende do processo ligado. Para produção, ainda é necessário definir infraestrutura, persistência/backup e execução durável de tarefas. Consulte `docs/business-rules.md`, `docs/architecture.md` e `docs/verification.md`.
+As contas e arquivos da demonstração local não acompanham este repositório. Publicação, Docker, e-mails reais, Google real, pagamentos reais e carga precisam ser homologados. A documentação antiga preservada em docs é histórica e pode descrever a primeira versão.

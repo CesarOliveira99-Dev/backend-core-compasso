@@ -10,12 +10,14 @@ export interface Order {
     kind: string;
     unitPriceCents: number;
     startsAt?: string;
+    professionalId?: string;
   }[];
   totalCents: number;
   discountCents: number;
   status: 'pending' | 'completed' | 'cancelled';
   paymentStatus: 'pending' | 'paid';
-  paymentMethod: 'on_day' | 'online';
+  paymentMethod: 'on_day' | 'online' | 'pix_manual';
+  pixKey?: string;
   address?: Address;
   seen: boolean;
   createdAt: string;

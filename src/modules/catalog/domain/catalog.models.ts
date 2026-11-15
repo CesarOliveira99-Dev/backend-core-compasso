@@ -1,4 +1,6 @@
+import type { MediaAsset } from '../../settings/domain/settings.models.js';
 export interface CatalogItem {
+  media?: MediaAsset[];
   id: string;
   name: string;
   description: string;

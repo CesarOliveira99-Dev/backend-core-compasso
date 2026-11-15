@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Context } from '../../../../core/application/context.js';
 import type { AuthRequest } from '../../../identity/identity.module.js';
 import { AppointmentsService } from '../../application/appointments-service.js';
@@ -10,6 +10,9 @@ export class AppointmentsController {
   ) {}
   @Get() list(@Req() r: AuthRequest) {
     return this.service.list(r.actor);
+  }
+  @Get('availability') availability(@Req() r: AuthRequest, @Query() query: unknown) {
+    return this.service.availability(r.actor, query);
   }
   @Post() create(@Req() r: AuthRequest, @Body() b: unknown) {
     return this.context.repository.transaction(() => this.service.create(r.actor, b));

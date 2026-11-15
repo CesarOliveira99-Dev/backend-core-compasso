@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { z } from 'zod';
+import { queueAppointmentMail } from '../../notifications/application/appointment-mail.js';
 import { Context, parse } from '../../../core/application/context.js';
 import type { Actor, Appointment, Order, Triage } from '../../../core/domain/models.js';
 @Injectable()
@@ -35,10 +36,11 @@ export class TriageService {
         );
         if (appointment.status !== 'pending')
           throw new BadRequestException('O agendamento já foi alterado.');
-        this.context.repository.put(actor.tenantId, 'appointments', appointment.id, {
+        const updated = this.context.repository.put<Appointment>(actor.tenantId, 'appointments', appointment.id, {
           ...appointment,
           status: input.status === 'approved' ? 'confirmed' : 'cancelled',
         });
+        queueAppointmentMail(this.context, actor, updated, 'confirmation');
       }
       if (triage.orderId && input.status === 'declined') {
         const order = this.context.require<Order>(actor, 'orders', triage.orderId);
