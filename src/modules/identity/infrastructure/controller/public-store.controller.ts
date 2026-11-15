@@ -51,6 +51,7 @@ export class PublicStoreController {
         openingHour: settings.openingHour,
         closingHour: settings.closingHour,
         workDays: settings.workDays,
+        timezone: settings.timezone,
       },
       catalog: this.catalog.list(visitor).map((item) => ({
         id: item.id,
@@ -68,3 +69,4 @@ export class PublicStoreController {
     };
   }
 }
+

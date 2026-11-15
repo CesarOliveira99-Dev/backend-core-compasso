@@ -1,5 +1,6 @@
 import type { Appointment, Settings } from "../../../core/domain/models.js";
 import type { Professional } from "../../../core/domain/professional.js";
+import { BadRequestException } from '@nestjs/common';
 
 export function validCalendarDate(value: string) {
   return (
@@ -21,17 +22,21 @@ export function localTimestamp(date: string, minutes: number, timezone: string) 
     second: "2-digit",
     hourCycle: "h23",
   });
-  let timestamp = target;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const representedAt = (timestamp: number) => {
     const parts = Object.fromEntries(
       formatter.formatToParts(timestamp).map((part) => [part.type, part.value]),
     );
-    const represented = Date.parse(
+    return Date.parse(
       `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}Z`,
     );
-    timestamp += target - represented;
-  }
-  return timestamp;
+  };
+  const offsets = new Set([-36, -12, 0, 12, 36].map(hours => {
+    const instant = target + hours * 3600000;
+    return representedAt(instant) - instant;
+  }));
+  const matches = [...offsets].map(offset => target - offset).filter(instant => representedAt(instant) === target);
+  if (matches.length !== 1) throw new BadRequestException('Horário inexistente ou ambíguo no fuso do espaço. Escolha outro horário.');
+  return matches[0];
 }
 export interface ScheduleWindow {
   opensAt: number;
@@ -169,3 +174,4 @@ export function freeSlots(
   }
   return slots;
 }
+

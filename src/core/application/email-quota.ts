@@ -5,13 +5,14 @@ import type { Context } from './context.js';
 import type { Actor } from '../domain/models.js';
 
 interface Reservation { day: string; month: string; state: 'reserved' | 'sent'; attempts?: number }
-const period = (now: number) => { const day = localDate(new Date(now), 'America/Sao_Paulo'); return { day, month: day.slice(0, 7) }; };
+const period = (now: number, timezone: string) => { const day = localDate(new Date(now), timezone); return { day, month: day.slice(0, 7) }; };
 const count = (repo: Repository, tenant: string, key: string) => repo.get<{ count: number }>(tenant, 'email_usage', key)?.count || 0;
 
 export function emailQuota(repo: Repository, tenantId: string, now = Date.now()) {
   const entitlement = storeEntitlement(repo, tenantId, now);
-  const { day, month } = period(now);
-  return { timezone: 'America/Sao_Paulo', day, month,
+  const timezone = repo.get<{timezone?: string}>(tenantId, 'settings', 'business')?.timezone || 'America/Sao_Paulo';
+  const { day, month } = period(now, timezone);
+  return { timezone, day, month,
     daily: { used: count(repo, tenantId, day), limit: entitlement.mode === 'pilot' ? null : entitlement.plan?.dailyEmails || 0 },
     monthly: { used: count(repo, tenantId, month), limit: entitlement.mode === 'pilot' ? null : entitlement.plan?.monthlyEmails || 0 } };
 }
@@ -61,3 +62,4 @@ export function notifyEmailQuota(context: Context, tenantId: string, now = Date.
         `email-quota:${periodKey}:${threshold}`);
   }
 }
+

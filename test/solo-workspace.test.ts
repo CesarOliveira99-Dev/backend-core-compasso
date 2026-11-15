@@ -44,6 +44,17 @@ function setup() {
   };
 }
 
+test('changing workspace timezone preserves existing appointment instants', () => {
+  const f = setup();
+  const appointment = { id: 'timezone-check', startsAt: '2026-11-16T12:00:00.000Z', endsAt: '2026-11-16T13:00:00.000Z', status: 'confirmed' };
+  f.repo.put(f.owner.tenantId, 'appointments', appointment.id, appointment);
+  const settings = f.context.settings(f.owner);
+  const service = new SettingsService(f.context, { validate() {}, releaseUnused() {} } as any);
+  service.update(f.owner, { ...settings, timezone: 'America/Campo_Grande' });
+  assert.equal(f.context.settings(f.owner).timezone, 'America/Campo_Grande');
+  assert.deepEqual(f.repo.get(f.owner.tenantId, 'appointments', appointment.id), appointment);
+});
+
 test("Solo registration is private, has one owner, works without an address and remains accessible through normal password login", () => {
   const f = setup(),
     settings = f.context.settings(f.owner);
@@ -572,3 +583,4 @@ test("changing Solo hours also updates an explicitly stored owner professional s
   assert.equal(principal.closingHour, 16);
   assert.deepEqual(principal.workDays, [1, 3, 5]);
 });
+

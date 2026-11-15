@@ -30,6 +30,16 @@ function fixture(t: { after: (fn: () => void) => void }) {
   return { repo, context, now, actor, appointment, queue, jobs, worker: new AppointmentMailWorker(context) };
 }
 
+test('confirmation email displays the workspace timezone without changing the appointment instant', t => {
+  const f = fixture(t);
+  const settings = f.repo.get<any>('tenant', 'settings', 'business');
+  f.repo.put('tenant', 'settings', 'business', { ...settings, timezone: 'America/Campo_Grande' });
+  f.queue();
+  assert.match(f.jobs()[0].text, /08:45/);
+  assert.match(f.jobs()[0].text, /America\/Campo_Grande/);
+  assert.equal(f.jobs()[0].startsAt, '2026-11-10T12:45:00Z');
+});
+
 test('queue persists one event, correct local time, no private notes and tenant-scoped keys', (t) => {
   const f = fixture(t);
   f.queue(); f.queue();
@@ -170,3 +180,4 @@ test('definite first rejection releases quota, but rejection after an uncertain 
   await f.worker.run(f.now + 180000, { send: async () => { throw new MailProviderRejected('409'); } });
   assert.equal(emailQuota(f.repo, 'tenant', f.now).monthly.used, 1);
 });
+

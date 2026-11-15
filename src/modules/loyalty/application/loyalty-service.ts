@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { z } from 'zod';
+import { localDate } from '../../../core/domain/policies.js';
 import { Context, id, parse, timestamp } from '../../../core/application/context.js';
 import type {
   Actor,
@@ -30,7 +31,7 @@ export class LoyaltyService {
       }),
       body,
     );
-    if (new Date(`${input.nextDate}T23:59:59-03:00`) <= new Date())
+    if (input.nextDate < localDate(new Date(), this.context.settings(actor).timezone))
       throw new BadRequestException('Escolha uma data futura.');
     const item = this.context.require<CatalogItem>(actor, 'catalog', input.itemId);
     const hasCompleted =
@@ -60,3 +61,4 @@ export class LoyaltyService {
     return this.context.repository.put(actor.tenantId, 'loyalty', loyalty.id, loyalty);
   }
 }
+

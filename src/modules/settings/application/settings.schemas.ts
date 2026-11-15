@@ -8,7 +8,10 @@ export const settingsSchema = z
     ...businessProfileFields,
     name: personNameSchema,
     businessName: z.string().trim().min(2).max(100),
-    timezone: z.literal('America/Sao_Paulo'),
+    timezone: z.string().min(1).max(64).refine(value => {
+      try { new Intl.DateTimeFormat('pt-BR', { timeZone: value }).format(); return value.includes('/'); }
+      catch { return false; }
+    }, 'Escolha um fuso horário válido.'),
     completionMode: z.enum(['manual', 'automatic']),
     payOnAppointment: z.boolean(),
     payOnDelivery: z.boolean(),
@@ -23,3 +26,4 @@ export const settingsSchema = z
     (s) => s.closingHour > s.openingHour,
     'Horário de fechamento deve ser posterior à abertura.',
   );
+
