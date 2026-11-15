@@ -185,7 +185,7 @@ export class SubscriptionBilling {
       const record: StoreSubscription = { id: result.id, planId: terms.planId, priceCents: terms.priceCents, periodMonths: terms.periodMonths || 1, extraEmployees: terms.extraEmployees || 0,
         url: result.init_point || '', status: result.status === 'canceled' ? 'cancelled' : result.status,
         externalReference: result.external_reference, checkedAt: timestamp(),
-        ...(previous?.id === result.id ? { paidThrough: previous.paidThrough } : {}) };
+        ...(previous?.id === result.id ? { paidThrough: previous.paidThrough, renewalFailureAt: previous.renewalFailureAt } : {}) };
       this.repo.put(reference.tenantId, 'billing', 'subscription', record);
       this.repo.put(scope, 'billing_subscriptions', result.id, { ...terms, externalReference: result.external_reference });
       this.repo.put(scope, 'billing_references', result.external_reference, terms);
@@ -276,7 +276,9 @@ export class SubscriptionBilling {
       const previous = this.repo.get<{ paymentId: string; approved: boolean }>(owner!.tenantId, 'subscription_invoices', id);
       if (previous?.approved && previous.paymentId !== String(charge.id)) throw new ConflictException('Fatura já possui outro pagamento.');
       this.repo.put(owner!.tenantId, 'subscription_invoices', id, { id, subscriptionId: invoice.preapproval_id,
-        paymentId: String(charge.id), approved, endsAt: approved ? subscriptionPeriodEnd(debit, owner!.periodMonths || 1) : 0 });
+        paymentId: String(charge.id), approved,
+        renewalFailureAt: charge.status === 'rejected' && Number.isFinite(debit) && debit <= Date.now() + 60000 ? debit : undefined,
+        endsAt: approved ? subscriptionPeriodEnd(debit, owner!.periodMonths || 1) : 0 });
       this.repo.put(scope, 'billing_payment_invoices', String(charge.id), { invoiceId: id });
       this.recompute(owner!.tenantId, invoice.preapproval_id);
     });
@@ -285,9 +287,10 @@ export class SubscriptionBilling {
   private recompute(tenantId: string, subscriptionId: string) {
     const current = this.repo.get<StoreSubscription>(tenantId, 'billing', 'subscription');
     if (!current || current.id !== subscriptionId) return;
-    const records = this.repo.list<{ subscriptionId: string; approved: boolean; endsAt: number }>(tenantId, 'subscription_invoices');
+    const records = this.repo.list<{ subscriptionId: string; approved: boolean; endsAt: number; renewalFailureAt?: number }>(tenantId, 'subscription_invoices');
     const paidThrough = Math.max(0, ...records.filter(invoice => invoice.subscriptionId === subscriptionId && invoice.approved).map(invoice => invoice.endsAt));
-    this.repo.put(tenantId, 'billing', 'subscription', { ...current, paidThrough });
+    const renewalFailureAt = Math.max(0, ...records.filter(invoice => invoice.subscriptionId === subscriptionId && !invoice.approved).map(invoice => invoice.renewalFailureAt || 0));
+    this.repo.put(tenantId, 'billing', 'subscription', { ...current, paidThrough, renewalFailureAt: renewalFailureAt || undefined });
   }
   async payment(id: string) {
     const known = this.repo.get<{ invoiceId: string }>(scope, 'billing_payment_invoices', id);
