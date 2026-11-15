@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { startBackupScheduler } from './core/infrastructure/backup-scheduler.js';
 import {
   verifiedProxyVisitor,
   authenticationMutation,
@@ -271,3 +272,5 @@ await app.listen(
 console.log(
   `Compasso API: http://${process.env.HOST || "127.0.0.1"}:${process.env.PORT || 4000}/v1`,
 );
+startBackupScheduler();
+
