@@ -818,6 +818,16 @@ export class IdentityService {
     }
     return this.session(customer);
   }
+  tutorialProgress(actor: Actor) {
+    return this.context.repository.list<{ id: string }>("system", "tutorial:" + (actor.identityId || actor.id)).map(item => item.id);
+  }
+  completeTutorial(actor: Actor, body: unknown) {
+    const input = body as { page?: unknown };
+    if (!input || typeof input.page !== "string" || !/^[a-z0-9:-]{1,100}$/.test(input.page))
+      throw new BadRequestException("Tutorial inválido.");
+    this.context.repository.put("system", "tutorial:" + (actor.identityId || actor.id), input.page, { id: input.page });
+    return { ok: true };
+  }
   login(body: unknown) {
     const input = parse(credentialsSchema, body);
     const key = input.email;

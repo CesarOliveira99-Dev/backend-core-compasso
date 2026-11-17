@@ -30,6 +30,12 @@ export class IdentityController {
   ) {
     return this.identity.createWorkspace(request.actor, body);
   }
+  @Get("tutorial") tutorial(@Req() request: AuthRequest) {
+    return this.identity.tutorialProgress(request.actor);
+  }
+  @Post("tutorial") completeTutorial(@Req() request: AuthRequest, @Body() body: unknown) {
+    return this.identity.completeTutorial(request.actor, body);
+  }
   @Post("workspaces/switch") switchWorkspace(
     @Req() request: AuthRequest,
     @Body() body: unknown,

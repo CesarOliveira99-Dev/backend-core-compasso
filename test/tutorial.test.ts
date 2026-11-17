@@ -1,0 +1,21 @@
+import 'reflect-metadata';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { DocumentRepository } from '../dist/core/infrastructure/document.repository.js';
+import { Context } from '../dist/core/application/context.js';
+import { IdentityService } from '../dist/modules/identity/application/identity-service.js';
+import { GoogleIdentity } from '../dist/modules/identity/application/google-identity.js';
+process.env.DATABASE_PATH = ':memory:';
+test('tutorial progress belongs to the authenticated identity, survives sessions and is idempotent', () => {
+  const repo = new DocumentRepository();
+  const service = new IdentityService(new Context(repo), new GoogleIdentity());
+  const actor = { id: 'member-a', identityId: 'person-a', tenantId: 'space-a', role: 'admin' as const, email: 'a@test.local' };
+  const page = 'v1:solo:admin:calendar';
+  assert.deepEqual(service.tutorialProgress(actor), []);
+  service.completeTutorial(actor, { page, identityId: 'person-b' });
+  service.completeTutorial(actor, { page });
+  const anotherSession = new IdentityService(new Context(repo), new GoogleIdentity());
+  assert.deepEqual(anotherSession.tutorialProgress({ ...actor, id: 'member-b', tenantId: 'space-b' }), [page]);
+  assert.deepEqual(service.tutorialProgress({ ...actor, identityId: 'person-b' }), []);
+  for (const body of [null, {}, { page: '../other' }, { page: 'x'.repeat(101) }]) assert.throws(() => service.completeTutorial(actor, body));
+});

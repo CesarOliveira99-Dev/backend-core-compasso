@@ -200,9 +200,9 @@ const guard: CanActivate = {
       const path = httpRequest.path.replace(/^\/v1\//, "");
       const allowed =
         httpRequest.method === "GET"
-          ? /^(auth\/(me|last-visit)|customers\/profile)$/.test(path)
+          ? /^(auth\/(me|tutorial|last-visit)|customers\/profile)$/.test(path)
           : httpRequest.method === "POST"
-            ? /^(auth\/(logout|switch-store|last-visit\/review|email\/request|invite\/accept|google\/link)|customers\/addresses)$/.test(
+            ? /^(auth\/(tutorial|logout|switch-store|last-visit\/review|email\/request|invite\/accept|google\/link)|customers\/addresses)$/.test(
                 path,
               )
             : httpRequest.method === "PATCH" &&
@@ -242,11 +242,11 @@ const guard: CanActivate = {
         .getRequest<{ path: string; method: string }>();
       const path = http.path.replace(/^\/v1\//, "");
       const readable =
-        /^(workspace\/(?:preferences|analytics|export|customers(?:\/[\w-]+)?)|auth\/me|catalog|settings|appointments(?:\/availability)?|notifications|professionals)$/.test(
+        /^(workspace\/(?:preferences|analytics|export|customers(?:\/[\w-]+)?)|auth\/(?:me|tutorial)|catalog|settings|appointments(?:\/availability)?|notifications|professionals)$/.test(
           path,
         );
       const writable =
-        /^(workspace\/(?:preferences|customers\/[\w-]+(?:\/redeem)?|appointments\/[\w-]+\/style)|auth\/logout|auth\/email\/request|auth\/switch-store|auth\/invite\/accept|notifications(?:\/[^/]+)?|appointments\/[^/]+|professionals\/[^/]+)$/.test(
+        /^(workspace\/(?:preferences|customers\/[\w-]+(?:\/redeem)?|appointments\/[\w-]+\/style)|auth\/(?:logout|tutorial)|auth\/email\/request|auth\/switch-store|auth\/invite\/accept|notifications(?:\/[^/]+)?|appointments\/[^/]+|professionals\/[^/]+)$/.test(
           path,
         );
       if (
