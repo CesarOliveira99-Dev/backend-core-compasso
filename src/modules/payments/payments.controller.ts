@@ -9,6 +9,9 @@ export class PaymentsController {
   @Get('status') status(@Req() request: AuthRequest) {
     return this.service.status(request.actor);
   }
+  @Get('referrals') referrals(@Req() request: AuthRequest) {
+    return this.service.billing.referrals.status(request.actor);
+  }
   @Post('connect') connect(@Req() request: AuthRequest) {
     return this.service.connect(request.actor);
   }

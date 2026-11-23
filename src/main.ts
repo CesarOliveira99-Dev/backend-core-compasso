@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { startBackupScheduler } from './core/infrastructure/backup-scheduler.js';
+import { PaymentsService } from './modules/payments/payments.service.js';
 import {
   verifiedProxyVisitor,
   authenticationMutation,
@@ -273,4 +274,15 @@ console.log(
   `Compasso API: http://${process.env.HOST || "127.0.0.1"}:${process.env.PORT || 4000}/v1`,
 );
 startBackupScheduler();
+let referralMaintenanceRunning = false;
+const referralMaintenance = async () => {
+  if (referralMaintenanceRunning) return;
+  referralMaintenanceRunning = true;
+  try { await app.get(PaymentsService).billing.reconcileReferrals(); }
+  catch { console.warn('Referral reconciliation deferred.'); }
+  finally { referralMaintenanceRunning = false; }
+};
+void referralMaintenance();
+const referralTimer = setInterval(() => void referralMaintenance(), 5 * 60000);
+referralTimer.unref();
 

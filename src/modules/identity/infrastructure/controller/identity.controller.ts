@@ -136,6 +136,9 @@ export class IdentityController {
   @Public() @Post("register") register(@Body() body: unknown) {
     return this.identity.register(parse(registrationRequestSchema, body));
   }
+  @Public() @Get('referral-config') referralConfig() {
+    return { enabled: process.env.COMPASSO_REFERRALS_ENABLED === 'true' };
+  }
   @Get("me") me(@Req() request: AuthRequest) {
     return request.actor;
   }

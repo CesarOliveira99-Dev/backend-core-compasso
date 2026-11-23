@@ -34,6 +34,7 @@ import {
 } from "./identity.schemas.js";
 import { GoogleIdentity } from "./google-identity.js";
 import { z } from "zod";
+import { Referrals, referralCodeSchema } from '../../payments/referrals.js';
 import { businessAddressSchema } from "../../settings/application/business-profile.schemas.js";
 @Injectable()
 export class IdentityService {
@@ -322,6 +323,7 @@ export class IdentityService {
     const input = parse(
       z.object({
         enrollmentToken: z.string().length(64),
+        referralCode: z.preprocess(value => value === '' ? undefined : value, referralCodeSchema.optional()),
         name: personNameSchema.optional(),
         slug: z.string().min(2).max(60).optional(),
         address: businessAddressSchema.optional(),
@@ -671,6 +673,7 @@ export class IdentityService {
   }
   private createAccount(body: unknown, owner?: Customer) {
     const parsed = parse(registrationSchema, body);
+    const hasExistingAccount = !!owner || this.customerAccounts.all(parsed.email).length > 0;
     if (parsed.workspaceMode === "solo" && parsed.role !== "admin")
       throw new BadRequestException(
         "Agenda individual exige uma conta de proprietário.",
@@ -801,6 +804,7 @@ export class IdentityService {
         );
       }
       startStoreTrial(this.context.repository, customer);
+      new Referrals(this.context).attribute(customer, parsed.referralCode, hasExistingAccount);
     }
     if (owner) {
       const google = this.context.repository.get<{ sub?: string }>(

@@ -3,6 +3,7 @@ import { SetMetadata } from '@nestjs/common';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { businessAddressSchema } from '../../settings/application/business-profile.schemas.js';
+import { referralCodeSchema } from '../../payments/referrals.js';
 import type { Actor } from '../../../core/domain/models.js';
 
 export const Public = () => SetMetadata('public', true);
@@ -28,6 +29,7 @@ export const credentialsSchema = z.object({
   slug: z.string().min(2).max(60).optional(),
 });
 export const registrationSchema = credentialsSchema.extend({
+  referralCode: z.preprocess(value => value === '' ? undefined : value, referralCodeSchema.optional()),
   idempotencyKey: z.string().uuid().optional(),
   name: personNameSchema,
   phone: phoneSchema,

@@ -7,18 +7,20 @@ import { Context, parse, timestamp } from '../../core/application/context.js';
 import { employeeSeats, planPrice, findPlan, STORE_PLANS, SOLO_PLANS, storeEntitlement, type PlanId, type StoreSubscription } from '../../core/application/store-plans.js';
 import { emailQuota } from '../../core/application/email-quota.js';
 import type { Actor } from '../../core/domain/models.js';
+import { Referrals, discountAmount, type DiscountCycle } from './referrals.js';
 
 type Call = <T>(path: string, token?: string, body?: unknown, key?: string, method?: 'PUT') => Promise<T>;
 interface Reference { tenantId: string; planId: PlanId; priceCents: number; extraEmployees?: number; priceHistory?: number[]; periodMonths?: number }
 interface ExtraChange { subscriptionId: string; extraEmployees: number; priceCents: number; createdAt: string }
 interface Setup extends Reference { key: string; reference: string; createdAt: number }
+interface ReferralPricing { subscriptionId: string; amountCents: number; confirmed: boolean; cycleId?: string }
 const scope = '__compasso_payments__';
 const referencePrefix = 'compasso-sub:';
 const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/);
 const preapprovalSchema = z.object({
   id: identifier, collector_id: z.union([z.number(), z.string()]),
   external_reference: z.string(), status: z.enum(['pending', 'authorized', 'paused', 'cancelled', 'canceled']),
-  init_point: z.url().nullish(), auto_recurring: z.object({ transaction_amount: z.number().positive(), currency_id: z.literal('BRL'),
+  init_point: z.url().nullish(), next_payment_date: z.string().optional(), auto_recurring: z.object({ transaction_amount: z.number().nonnegative(), currency_id: z.literal('BRL'),
     frequency: z.union([z.literal(1), z.literal(12)]), frequency_type: z.literal('months') }),
 });
 const numberId = z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]);
@@ -27,7 +29,7 @@ const invoiceSchema = z.object({ id: numberId, preapproval_id: identifier, curre
   payment: z.object({ id: numberId.optional() }).nullable().optional(),
 });
 const chargeSchema = z.object({ id: numberId, collector_id: numberId, currency_id: z.string(),
-  transaction_amount: z.number().positive(), transaction_amount_refunded: z.number().nonnegative().optional(),
+  transaction_amount: z.number().nonnegative(), transaction_amount_refunded: z.number().nonnegative().optional(),
   live_mode: z.boolean(), status: z.string(), date_approved: z.string().nullable().optional() });
 
 /** Add billing calendar months without overflowing February or short months. */
@@ -41,7 +43,9 @@ export function subscriptionPeriodEnd(start: number, months = 1) {
 
 export class SubscriptionBilling {
   private readonly creating = new Set<string>();
-  constructor(private readonly context: Context, private readonly call: Call) {}
+  private readonly referralSyncing = new Set<string>();
+  readonly referrals: Referrals;
+  constructor(private readonly context: Context, private readonly call: Call) { this.referrals = new Referrals(context); }
   private get repo() { return this.context.repository; }
   enabled() { return process.env.COMPASSO_SUBSCRIPTIONS_ENABLED === 'true' && !!(
     process.env.MP_PLATFORM_ACCESS_TOKEN && process.env.MP_PLATFORM_USER_ID && process.env.MP_WEBHOOK_SECRET &&
@@ -50,7 +54,7 @@ export class SubscriptionBilling {
     this.context.admin(actor);
     const access = storeEntitlement(this.repo, actor.tenantId);
     const subscription = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
-    return { billingEnabled: this.enabled(), plans: isSolo(this.repo, actor.tenantId) ? SOLO_PLANS : STORE_PLANS, entitlement: access,
+    return { referralsEnabled: this.referrals.enabled(), billingEnabled: this.enabled(), plans: isSolo(this.repo, actor.tenantId) ? SOLO_PLANS : STORE_PLANS, entitlement: access,
       emailUsage: emailQuota(this.repo, actor.tenantId), employeesUsed: employeeSeats(this.repo, actor.tenantId),
       extrasPending: !!this.repo.get(actor.tenantId, 'billing', 'extras_change'),
       setupPending: !!this.repo.get(actor.tenantId, 'billing', 'subscription_setup'),
@@ -107,6 +111,9 @@ export class SubscriptionBilling {
   }
   async changeExtras(actor: Actor, body: unknown) {
     this.context.admin(actor);
+    if (this.referralSyncing.has(actor.tenantId)) throw new ConflictException('Aguarde a atualização do desconto.');
+    if (this.repo.list<DiscountCycle>(actor.tenantId, 'referral_cycles').some(cycle => cycle.state === 'preparing' || cycle.state === 'applied'))
+      throw new ConflictException('Aguarde a renovação com desconto antes de alterar colaboradores extras.');
     const input = parse(z.object({ extraEmployees: z.number().int().min(0).max(90), expectedPriceCents: z.number().int().positive() }).strict(), body);
     const priceCents = planPrice('equipe', input.extraEmployees);
     if (input.expectedPriceCents !== priceCents) throw new ConflictException('O valor mudou. Confira a mensalidade antes de confirmar.');
@@ -164,9 +171,13 @@ export class SubscriptionBilling {
     const reference = this.repo.get<Reference>(scope, 'billing_references', result.external_reference);
     const pending = reference && this.repo.get<ExtraChange>(reference.tenantId, 'billing', 'extras_change');
     const actualPrice = Math.round(result.auto_recurring.transaction_amount * 100);
+    const referralPricing = reference && this.repo.get<ReferralPricing>(reference.tenantId, 'billing', 'referral_pricing');
+    const referralPrice = referralPricing?.subscriptionId === result.id && referralPricing.amountCents === actualPrice;
+    const priorReferralPrice = reference && this.repo.list<DiscountCycle>(reference.tenantId, 'referral_cycles')
+      .some(cycle => cycle.subscriptionId === result.id && cycle.amountCents === actualPrice && cycle.state !== 'preparing');
     const changed = pending && pending.subscriptionId === result.id && pending.priceCents === actualPrice;
     if (!reference || String(result.collector_id) !== process.env.MP_PLATFORM_USER_ID ||
-        (actualPrice !== reference.priceCents && !changed) ||
+        (actualPrice !== reference.priceCents && !changed && !referralPrice && !priorReferralPrice) ||
         result.auto_recurring.frequency !== (reference?.periodMonths || 1))
       throw new ForbiddenException('Assinatura, recebedor ou valor incompatível.');
     const cancelled = result.status === 'cancelled' || result.status === 'canceled';
@@ -187,6 +198,10 @@ export class SubscriptionBilling {
         externalReference: result.external_reference, checkedAt: timestamp(),
         ...(previous?.id === result.id ? { paidThrough: previous.paidThrough, renewalFailureAt: previous.renewalFailureAt } : {}) };
       this.repo.put(reference.tenantId, 'billing', 'subscription', record);
+      if (cancelled) {
+        for (const cycle of this.repo.list<DiscountCycle>(reference.tenantId, 'referral_cycles').filter(row => row.subscriptionId === result.id && (row.state === 'applied' || row.state === 'preparing')))
+          this.repo.put(reference.tenantId, 'referral_cycles', cycle.id, { ...cycle, state: 'released' });
+      }
       this.repo.put(scope, 'billing_subscriptions', result.id, { ...terms, externalReference: result.external_reference });
       this.repo.put(scope, 'billing_references', result.external_reference, terms);
       if (changed) this.repo.remove(reference.tenantId, 'billing', 'extras_change');
@@ -240,6 +255,7 @@ export class SubscriptionBilling {
       for (const invoice of response.results) await this.invoice(String(invoice.id));
       if (response.results.length < 20 || offset + 20 >= (response.paging?.total || 0)) break;
     }
+    if (this.referrals.enabled()) await this.syncReferralPricing(actor.tenantId);
     return this.status(actor);
   }
   async invoice(id: string, expectedPaymentId?: string) {
@@ -255,12 +271,16 @@ export class SubscriptionBilling {
     }
     if (!owner) return false;
     const invoicePrice = Math.round(Number(invoice.transaction_amount) * 100);
+    const discountCycle = this.repo.list<DiscountCycle>(owner.tenantId, 'referral_cycles').find(cycle =>
+      cycle.subscriptionId === invoice.preapproval_id && Math.abs(cycle.dueAt - Date.parse(invoice.debit_date)) < 60000);
     if (![owner.priceCents, ...(owner.priceHistory || [])].includes(invoicePrice) &&
         this.repo.get(owner.tenantId, 'billing', 'extras_change')) {
       await this.preapproval(invoice.preapproval_id);
       owner = this.repo.get<Reference>(scope, 'billing_subscriptions', invoice.preapproval_id)!;
     }
-    if (invoice.currency_id !== 'BRL' || ![owner.priceCents, ...(owner.priceHistory || [])].includes(invoicePrice))
+    if (invoice.currency_id !== 'BRL' || (discountCycle
+      ? discountCycle.amountCents !== invoicePrice || discountCycle.state === 'preparing'
+      : ![owner.priceCents, ...(owner.priceHistory || [])].includes(invoicePrice)))
       throw new ForbiddenException('Valor da fatura incompatível.');
     if (!invoice.payment?.id) return true;
     const charge = parse(chargeSchema, await this.call<unknown>(`/v1/payments/${invoice.payment.id}`, this.token()));
@@ -277,20 +297,139 @@ export class SubscriptionBilling {
       if (previous?.approved && previous.paymentId !== String(charge.id)) throw new ConflictException('Fatura já possui outro pagamento.');
       this.repo.put(owner!.tenantId, 'subscription_invoices', id, { id, subscriptionId: invoice.preapproval_id,
         paymentId: String(charge.id), approved,
+        approvedAt: approved ? approval : undefined,
+        paidAmountCents: approved ? invoicePrice : 0,
         renewalFailureAt: charge.status === 'rejected' && Number.isFinite(debit) && debit <= Date.now() + 60000 ? debit : undefined,
         endsAt: approved ? subscriptionPeriodEnd(debit, owner!.periodMonths || 1) : 0 });
       this.repo.put(scope, 'billing_payment_invoices', String(charge.id), { invoiceId: id });
+      if (discountCycle && approved) {
+        if (discountCycle.invoiceId && discountCycle.invoiceId !== id) throw new ConflictException('Desconto já utilizado por outra fatura.');
+        this.repo.put(owner!.tenantId, 'referral_cycles', discountCycle.id, { ...discountCycle, state: 'consumed', invoiceId: id, approved });
+      }
       this.recompute(owner!.tenantId, invoice.preapproval_id);
     });
+    const issuer = this.referrals.reconcile(owner.tenantId);
+    if ((this.referrals.enabled() && process.env.COMPASSO_REFERRAL_BILLING_ENABLED === 'true') || discountCycle) {
+      // A failed provider update must remain retryable without undoing a confirmed payment.
+      try { await this.syncReferralPricing(owner.tenantId); if (issuer && issuer !== owner.tenantId) await this.syncReferralPricing(issuer); }
+      catch { console.warn('Referral pricing deferred; reconciliation will retry.'); }
+    }
     return true;
   }
   private recompute(tenantId: string, subscriptionId: string) {
     const current = this.repo.get<StoreSubscription>(tenantId, 'billing', 'subscription');
     if (!current || current.id !== subscriptionId) return;
     const records = this.repo.list<{ subscriptionId: string; approved: boolean; endsAt: number; renewalFailureAt?: number }>(tenantId, 'subscription_invoices');
-    const paidThrough = Math.max(0, ...records.filter(invoice => invoice.subscriptionId === subscriptionId && invoice.approved).map(invoice => invoice.endsAt));
+    const freeCycles = this.repo.list<DiscountCycle>(tenantId, 'referral_cycles').filter(cycle => cycle.subscriptionId === subscriptionId && cycle.amountCents === 0 && cycle.state === 'consumed');
+    const paidThrough = Math.max(0, ...records.filter(invoice => invoice.subscriptionId === subscriptionId && invoice.approved).map(invoice => invoice.endsAt),
+      ...freeCycles.map(cycle => subscriptionPeriodEnd(cycle.dueAt, current.periodMonths || 1)));
     const renewalFailureAt = Math.max(0, ...records.filter(invoice => invoice.subscriptionId === subscriptionId && !invoice.approved).map(invoice => invoice.renewalFailureAt || 0));
     this.repo.put(tenantId, 'billing', 'subscription', { ...current, paidThrough, renewalFailureAt: renewalFailureAt || undefined });
+  }
+  async reconcileReferrals() {
+    for (const tenantId of this.referrals.referredTenants()) this.referrals.reconcile(tenantId);
+    for (const tenantId of this.referrals.issuerTenants()) {
+      try { await this.syncReferralPricing(tenantId); }
+      catch { console.warn('Referral pricing awaiting provider reconciliation.'); }
+    }
+  }
+  async syncReferralPricing(tenantId: string) {
+    if (this.referralSyncing.has(tenantId)) return;
+    const enabled = this.referrals.enabled() && process.env.COMPASSO_REFERRAL_BILLING_ENABLED === 'true';
+    const outstanding = this.repo.list<DiscountCycle>(tenantId, 'referral_cycles').some(row => row.state === 'preparing' || row.state === 'applied');
+    const restore = this.repo.get<ReferralPricing>(tenantId, 'billing', 'referral_pricing');
+    if (!enabled && !outstanding && !restore?.cycleId) return;
+    this.referralSyncing.add(tenantId);
+    try {
+      const current = this.repo.get<StoreSubscription>(tenantId, 'billing', 'subscription');
+      if (!current || this.creating.has(tenantId) || this.repo.get(tenantId, 'billing', 'extras_change')) return;
+      const raw = await this.call<unknown>('/preapproval/' + encodeURIComponent(current.id), this.token());
+      const checked = parse(preapprovalSchema, raw);
+      if (checked.id !== current.id || checked.external_reference !== current.externalReference) throw new ForbiddenException('Assinatura incompatível.');
+      this.savePreapproval(raw);
+      if (checked.status === 'cancelled' || checked.status === 'canceled') {
+        for (const reserved of this.repo.list<DiscountCycle>(tenantId, 'referral_cycles').filter(row => row.subscriptionId === current.id && (row.state === 'applied' || row.state === 'preparing'))) {
+          // Keep the cycle history: a delayed approved invoice will re-consume the same reservation.
+          this.repo.put(tenantId, 'referral_cycles', reserved.id, { ...reserved, state: 'released' });
+        }
+        return;
+      }
+      if (checked.status !== 'authorized') return;
+      const nextDue = Date.parse(checked.next_payment_date || '');
+      let cycle = this.repo.list<DiscountCycle>(tenantId, 'referral_cycles').find(row => row.subscriptionId === current.id && (row.state === 'preparing' || row.state === 'applied'));
+      if (cycle?.state === 'applied' && cycle.amountCents > 0 && nextDue > cycle.dueAt) {
+        // Recover approved renewals even if their webhook was not delivered.
+        for (let offset = 0; offset < 100; offset += 20) {
+          const response = await this.call<{ results: { id: number | string }[] }>(`/authorized_payments/search?preapproval_id=${encodeURIComponent(current.id)}&limit=20&offset=${offset}`, this.token());
+          if (!Array.isArray(response.results)) throw new BadRequestException('Resposta de faturas inválida.');
+          for (const row of response.results) await this.invoice(String(row.id));
+          if (response.results.length < 20) break;
+        }
+        cycle = this.repo.list<DiscountCycle>(tenantId, 'referral_cycles').find(row => row.subscriptionId === current.id && (row.state === 'preparing' || row.state === 'applied'));
+      }
+      if (cycle?.state === 'applied' && cycle.amountCents === 0 && Date.now() >= cycle.dueAt && nextDue > cycle.dueAt) {
+        this.repo.transaction(() => {
+          this.repo.put(tenantId, 'referral_cycles', cycle!.id, { ...cycle, state: 'consumed', approved: true });
+          this.recompute(tenantId, current.id);
+        });
+        cycle = undefined;
+      }
+      // A scheduled price is fixed until its invoice settles. New referrals wait for the next cycle.
+      if (cycle?.state === 'applied') return;
+      const priorPricing = this.repo.get<ReferralPricing>(tenantId, 'billing', 'referral_pricing');
+      if (!cycle && priorPricing?.subscriptionId === current.id && (priorPricing.amountCents !== current.priceCents || !priorPricing.confirmed)) {
+        await this.setReferralPrice(tenantId, current, current.priceCents);
+      }
+      if (!cycle) {
+        if (!enabled) return;
+        const available = this.referrals.balance(tenantId);
+        const paidThrough = this.repo.get<StoreSubscription>(tenantId, 'billing', 'subscription')?.paidThrough || 0;
+        // Never discount an initial payment, past-due invoice or one already about to be collected.
+        if (available <= 0 || !Number.isFinite(nextDue) || nextDue < Date.now() + 86400000 || paidThrough < Date.now()) return;
+        // Updating a recurrence cannot change an invoice already generated at the previous price.
+        for (let offset = 0; offset < 100; offset += 20) {
+          const page = await this.call<{ results: { id: number | string }[] }>(`/authorized_payments/search?preapproval_id=${encodeURIComponent(current.id)}&limit=20&offset=${offset}`, this.token());
+          if (!Array.isArray(page.results)) throw new BadRequestException('Resposta de faturas inválida.');
+          for (const row of page.results) {
+            const pending = parse(invoiceSchema, await this.call<unknown>(`/authorized_payments/${encodeURIComponent(String(row.id))}`, this.token()));
+            if (pending.preapproval_id !== current.id) throw new ForbiddenException('Fatura incompatível.');
+            if (Math.abs(Date.parse(pending.debit_date) - nextDue) < 60000) return;
+          }
+          if (page.results.length < 20) break;
+          if (offset === 80) return;
+        }
+        const plan = findPlan(current.planId)!;
+        const bps = Math.min(10000, available);
+        const amountCents = discountAmount(plan.priceCents, current.priceCents, bps);
+        if (amountCents === 0 && process.env.COMPASSO_REFERRAL_ZERO_AMOUNT_VERIFIED !== 'true') return;
+        cycle = this.repo.transaction(() => {
+          const id = `${current.id}:${nextDue}`;
+          const existing = this.repo.get<DiscountCycle>(tenantId, 'referral_cycles', id);
+          if (existing) return existing;
+          const reserved: DiscountCycle = { id, subscriptionId: current.id, dueAt: nextDue, discountBps: bps,
+            baseCents: plan.priceCents, amountCents, state: 'preparing' };
+          this.repo.put(tenantId, 'referral_cycles', id, reserved);
+          return reserved;
+        });
+      }
+      if (cycle.state !== 'preparing') return;
+      await this.setReferralPrice(tenantId, current, cycle.amountCents, cycle.id);
+      this.repo.put(tenantId, 'referral_cycles', cycle.id, { ...cycle, state: 'applied' });
+    } finally { this.referralSyncing.delete(tenantId); }
+  }
+  private async setReferralPrice(tenantId: string, current: StoreSubscription, amountCents: number, cycleId?: string) {
+    const intent: ReferralPricing = { subscriptionId: current.id, amountCents, cycleId, confirmed: false };
+    this.repo.put(tenantId, 'billing', 'referral_pricing', intent);
+    // Retry the same desired value after any ambiguous transport failure; do not recreate subscriptions.
+    await this.call('/preapproval/' + encodeURIComponent(current.id), this.token(), {
+      auto_recurring: { transaction_amount: amountCents / 100, currency_id: 'BRL' },
+    }, undefined, 'PUT');
+    const raw = await this.call<unknown>('/preapproval/' + encodeURIComponent(current.id), this.token());
+    const checked = parse(preapprovalSchema, raw);
+    if (checked.id !== current.id || checked.external_reference !== current.externalReference) throw new ForbiddenException('Assinatura incompatível.');
+    if (Math.round(checked.auto_recurring.transaction_amount * 100) !== amountCents) throw new ConflictException('Desconto aguarda confirmação do Mercado Pago.');
+    this.savePreapproval(raw);
+    this.repo.put(tenantId, 'billing', 'referral_pricing', { ...intent, confirmed: true });
   }
   async payment(id: string) {
     const known = this.repo.get<{ invoiceId: string }>(scope, 'billing_payment_invoices', id);
