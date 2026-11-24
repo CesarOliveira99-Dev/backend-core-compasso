@@ -119,7 +119,7 @@ function fixture() {
   const call = async (path: string, _token?: string, body?: any) => {
     if (path === '/preapproval') { creates++; bodies.push(body); external = body.external_reference; amount = body.auto_recurring.transaction_amount; if (fail) throw new Error('network'); return preapproval(); }
     if (path.startsWith('/preapproval/search')) return { results: [preapproval()] };
-    if (path === '/preapproval/sub') { if (body?.status === 'cancelled') status = 'cancelled'; return preapproval(); }
+    if (path === '/preapproval/sub') { if (body?.status === 'canceled') status = 'cancelled'; return preapproval(); }
     if (path.startsWith('/authorized_payments/search')) return { results: [{ id: 44 }] };
     if (path === `/authorized_payments/${invoiceId}`) return { id: invoiceId, preapproval_id: 'sub', currency_id: 'BRL', transaction_amount: '59.90', debit_date: new Date(debitDate).toISOString(), payment: { id: paymentId } };
     if (path === `/v1/payments/${paymentId}`) return { id: paymentId, collector_id: collector, currency_id: 'BRL', transaction_amount: amount,

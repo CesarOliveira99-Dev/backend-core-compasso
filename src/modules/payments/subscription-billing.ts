@@ -72,23 +72,30 @@ export class SubscriptionBilling {
     const periodMonths = 'periodMonths' in plan ? plan.periodMonths : 1;
     if (employeeSeats(this.repo, actor.tenantId) > plan.employees + extraEmployees)
       throw new BadRequestException(`Desative os funcionários excedentes antes de contratar este plano de até ${plan.employees} funcionário(s).`);
-    const existing = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
-    if (existing && existing.status !== 'cancelled' && existing.status !== 'canceled') {
-      if (existing.planId !== planId || (existing.extraEmployees || 0) !== extraEmployees) throw new ConflictException('Gerencie ou cancele a assinatura atual antes de mudar de plano.');
-      return { url: existing.url };
-    }
-    if ((existing?.paidThrough || 0) > Date.now())
-      throw new ConflictException('Seu período pago ainda está válido. Aguarde o término para contratar outro plano sem sobrepor cobranças.');
     if (this.creating.has(actor.tenantId)) throw new ConflictException('Sua assinatura está sendo preparada. Aguarde.');
     this.creating.add(actor.tenantId);
     try {
       const pending = this.repo.get<Setup>(actor.tenantId, 'billing', 'subscription_setup');
       if (pending) {
         await this.refresh(actor);
-        const recovered = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
-        if (recovered && recovered.externalReference === pending.reference && recovered.planId === planId && (recovered.extraEmployees || 0) === extraEmployees) return { url: recovered.url };
-        throw new ConflictException('A tentativa anterior aguarda conferência. Atualize a situação antes de contratar novamente.');
       }
+      let existing = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
+      if (existing && !['cancelled', 'canceled'].includes(existing.status)) {
+        // Re-read the provider before reusing or replacing a checkout: a payment
+        // may have completed in another tab since the last webhook.
+        existing = await this.preapproval(existing.id);
+        if (existing.planId === planId && (existing.extraEmployees || 0) === extraEmployees && !['cancelled', 'canceled'].includes(existing.status))
+          return { url: existing.url };
+        if (existing.status === 'pending' && !existing.paidThrough) {
+          await this.refresh(actor);
+          await this.cancelUnpaidPending(actor);
+          existing = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
+        } else if (!['cancelled', 'canceled'].includes(existing.status)) {
+          throw new ConflictException('Sua assinatura já foi confirmada. Gerencie a renovação antes de mudar de plano.');
+        }
+      }
+      if ((existing?.paidThrough || 0) > Date.now())
+        throw new ConflictException('Seu período pago ainda está válido. Aguarde o término para contratar outro plano sem sobrepor cobranças.');
       const app = new URL(process.env.APP_URL!), api = new URL(process.env.PUBLIC_API_URL!);
       if (app.protocol !== 'https:' || api.protocol !== 'https:') throw new BadRequestException('Assinaturas exigem URLs HTTPS.');
       const key = randomUUID();
@@ -221,6 +228,11 @@ export class SubscriptionBilling {
     if (this.creating.has(actor.tenantId)) throw new ConflictException('Aguarde a operação anterior terminar.');
     this.creating.add(actor.tenantId);
     try {
+      await this.cancelUnpaidPending(actor);
+      return this.status(actor);
+    } finally { this.creating.delete(actor.tenantId); }
+  }
+  private async cancelUnpaidPending(actor: Actor) {
       const current = this.repo.get<StoreSubscription>(actor.tenantId, 'billing', 'subscription');
       if (!current || current.status !== 'pending' || (current.paidThrough || 0) > Date.now())
         throw new ConflictException('Somente uma contratação pendente e sem período pago pode ser cancelada aqui.');
@@ -229,11 +241,10 @@ export class SubscriptionBilling {
       const checked = await this.preapproval(current.id);
       if (checked.status === 'cancelled') return this.status(actor);
       if (checked.status !== 'pending') throw new ConflictException('A assinatura mudou no Mercado Pago. Atualize a situação antes de cancelar.');
-      await this.call('/preapproval/' + encodeURIComponent(current.id), this.token(), { status: 'cancelled' }, undefined, 'PUT');
+      await this.call('/preapproval/' + encodeURIComponent(current.id), this.token(), { status: 'canceled' }, undefined, 'PUT');
       const cancelled = await this.preapproval(current.id);
       if (cancelled.status !== 'cancelled') throw new ConflictException('O cancelamento ainda não foi confirmado no Mercado Pago. Atualize a situação.');
       return this.status(actor);
-    } finally { this.creating.delete(actor.tenantId); }
   }
   async refresh(actor: Actor) {
     this.context.admin(actor);
